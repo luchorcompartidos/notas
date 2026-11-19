@@ -1,0 +1,19 @@
+{
+  "appId": "io.github.luchorcompartidos.notas",
+  "appName": "Notas",
+  "webDir": "dist",
+  "android": {
+    "adjustMarginsForEdgeToEdge": "force"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 500,
+      "launchAutoHide": false,
+      "showSpinner": false,
+      "backgroundColor": "#FEF7FF"
+    },
+    "Keyboard": {
+      "resizeOnFullScreen": true
+    }
+  }
+}

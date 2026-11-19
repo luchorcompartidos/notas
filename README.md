@@ -1,18 +1,40 @@
-# prueba-deploy
+# Notas — Prueba de concepto, Parte 1
 
-Repositorio plantilla (Template repository) para las apps de la caja de apps publicadas en GitHub Pages.
+Objetivo: comprobar si una app hecha con **web + Capacitor** se siente nativa en Android y si la
+versión web se ve igual. **No tiene sincronización todavía**: cada dispositivo guarda sus notas localmente.
 
-## Al crear un repo nuevo con "Use this template"
+- Web: `https://luchorcompartidos.github.io/notas/`
+- APK: en **Releases** (`notas-vX.Y.Z.apk`)
 
-1. **Settings → Pages:** Source = **Deploy from a branch → main → / (root)**.
-2. Poner la app en `index.html`, con `<meta name="app-version" content="v0.0.1">` en el `<head>` (o el número con que deba arrancar).
-3. Hacer el primer push con `[patch]`, `[minor]` o `[major]` en el mensaje: la primera Release toma el número escrito en el HTML.
+## Qué incluye
 
-El commit inicial que crea GitHub ("Initial commit") **no** genera Release, porque no lleva tipo.
+- Editor con formato (títulos, negrita, cursiva, subrayado, listas), **casillas** e **imágenes** (comprimidas a WebP, máx. 1280 px)
+- Barra de formato pegada arriba del teclado
+- Botón/gesto **Atrás** de Android, efecto ripple, vibración al tildar
+- Estilo Material 3, tema del sistema / claro / oscuro, color por nota, notas fijadas
+- Eliminar con "Deshacer"
+- Versión en el encabezado (al tocarla: fecha de la Release y link al Changelog) y aviso de versión nueva
 
-## Versiones
+## Cómo se publica
 
-Flujos copiados de `luchorcompartidos/home` → `plantilla/` (ver `ESTANDAR-VERSIONES.md`):
+Todo lo hace `.github/workflows/ci.yml` en cada push a `main`:
 
-- `release.yml`: en cada push a main crea tag y Release según `[major]`, `[minor]` o `[patch]` en el mensaje del commit. Sin etiqueta (o con `[skip release]`) publica igual, pero no crea Release.
-- `reemplazar-version.yml`: se lanza a mano desde Actions para rehacer o crear una versión puntual.
+| Marca en el mensaje del commit | Resultado |
+|---|---|
+| `[patch]`, `[minor]` o `[major]` | Web publicada + APK + **Release nueva** |
+| sin marca | Web publicada + APK de prueba (en *Actions → Artifacts*), **sin Release** (aviso en el workflow) |
+
+También se puede lanzar a mano: *Actions → CI → Run workflow* y elegir el tipo de Release.
+
+## Puesta en marcha (una sola vez)
+
+1. Crear el repo público `luchorcompartidos/notas` (vacío).
+2. *Settings → Pages → Build and deployment → Source:* **GitHub Actions**.
+3. Subir todos los archivos de este proyecto (incluida la carpeta `.github`) con el mensaje de commit:
+   `Prueba de concepto Parte 1 [patch]` → crea la **v0.0.1**.
+
+## Notas técnicas
+
+- El APK es de tipo *debug*: cada compilación usa una firma distinta, así que para instalar una versión
+  nueva puede hacer falta desinstalar la anterior. Se resuelve con una firma fija más adelante.
+- El ícono de la app es el predeterminado de Capacitor (se personaliza después).

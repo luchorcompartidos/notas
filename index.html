@@ -1,19 +1,92 @@
-<!DOCTYPE html>
-<html lang="es">
+<!doctype html>
+<html lang="es" data-scheme="light">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Prueba deploy</title>
-  <style>
-    body { font-family: system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; background: #eef4ff; color: #1a2b4c; }
-    .card { text-align: center; padding: 2rem 3rem; background: #fff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,.08); }
-    h1 { margin: 0 0 .5rem; font-size: 2.5rem; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="app-version" content="__APP_VERSION__">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#FEF7FF">
+  <title>Notas</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
 </head>
 <body>
-  <div class="card">
-    <h1>Versión 0.2</h1>
-    <p>Página de prueba de deploy en GitHub Pages.</p>
+  <div id="app">
+    <!-- Lista de notas -->
+    <section id="view-list" class="view active" aria-label="Lista de notas">
+      <header class="appbar" id="appbar-list">
+        <h1 class="appbar-title">Notas</h1>
+        <button class="version-chip ripple" id="btn-version" aria-label="Versión y cambios">v__APP_VERSION__</button>
+        <span class="spacer"></span>
+        <button class="icon-btn ripple" id="btn-menu-list" aria-label="Más opciones" data-icon="more"></button>
+      </header>
+      <div class="update-banner" id="update-banner" hidden>
+        <span id="update-text">Hay una versión nueva.</span>
+        <button class="text-btn ripple" id="update-action">Recargar</button>
+      </div>
+      <main class="scroll" id="list-scroll">
+        <div id="pinned-wrap" hidden>
+          <h2 class="section-label">Fijadas</h2>
+          <div class="grid" id="grid-pinned"></div>
+        </div>
+        <div id="others-wrap">
+          <h2 class="section-label" id="others-label" hidden>Otras</h2>
+          <div class="grid" id="grid-others"></div>
+        </div>
+        <div class="empty" id="empty" hidden>
+          <span data-icon="note"></span>
+          <p>Las notas que crees aparecen acá</p>
+        </div>
+      </main>
+      <button class="fab ripple" id="fab" aria-label="Nueva nota" data-icon="add"></button>
+    </section>
+
+    <!-- Editor -->
+    <section id="view-editor" class="view" aria-label="Editar nota">
+      <header class="appbar" id="appbar-editor">
+        <button class="icon-btn ripple" id="btn-back" aria-label="Volver" data-icon="back"></button>
+        <span class="spacer"></span>
+        <button class="icon-btn ripple" id="btn-pin" aria-label="Fijar nota" data-icon="pin"></button>
+        <button class="icon-btn ripple" id="btn-color" aria-label="Color de la nota" data-icon="palette"></button>
+        <button class="icon-btn ripple" id="btn-menu-editor" aria-label="Más opciones" data-icon="more"></button>
+      </header>
+      <main class="scroll" id="editor-scroll">
+        <div class="editor-wrap">
+          <input id="note-title" class="note-title" type="text" placeholder="Título"
+                 autocomplete="off" autocapitalize="sentences" enterkeyhint="next" spellcheck="true">
+          <div id="editor"></div>
+          <p class="edited" id="edited"></p>
+        </div>
+      </main>
+      <nav class="toolbar" id="toolbar" aria-label="Formato">
+        <button class="tool ripple" data-cmd="undo" aria-label="Deshacer" data-icon="undo"></button>
+        <button class="tool ripple" data-cmd="redo" aria-label="Rehacer" data-icon="redo"></button>
+        <span class="tool-sep"></span>
+        <button class="tool ripple" data-cmd="taskList" aria-label="Casillas" data-icon="checklist"></button>
+        <button class="tool ripple" data-cmd="heading" aria-label="Título" data-icon="title"></button>
+        <button class="tool ripple" data-cmd="bold" aria-label="Negrita" data-icon="bold"></button>
+        <button class="tool ripple" data-cmd="italic" aria-label="Cursiva" data-icon="italic"></button>
+        <button class="tool ripple" data-cmd="underline" aria-label="Subrayado" data-icon="underline"></button>
+        <button class="tool ripple" data-cmd="bulletList" aria-label="Lista con viñetas" data-icon="bullets"></button>
+        <button class="tool ripple" data-cmd="orderedList" aria-label="Lista numerada" data-icon="numbers"></button>
+        <button class="tool ripple" data-cmd="image" aria-label="Agregar imagen" data-icon="image"></button>
+      </nav>
+    </section>
   </div>
+
+  <div id="scrim" class="scrim"></div>
+  <div id="menu" class="menu" role="menu" hidden></div>
+
+  <div id="sheet" class="sheet" role="dialog" aria-label="Opciones" aria-hidden="true">
+    <div class="sheet-handle"></div>
+    <div id="sheet-body"></div>
+  </div>
+
+  <div id="snackbar" class="snackbar" role="status" aria-live="polite">
+    <span id="snack-text"></span>
+    <button class="snack-action" id="snack-action"></button>
+  </div>
+
+  <input type="file" id="file-image" accept="image/*" hidden>
+  <script type="module" src="./src/main.js"></script>
 </body>
 </html>
