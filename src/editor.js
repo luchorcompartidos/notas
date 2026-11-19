@@ -5,17 +5,21 @@ import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
+import Collaboration from '@tiptap/extension-collaboration';
+import { ySyncPluginKey } from 'y-prosemirror';
 
-export function createEditor(element, { onUpdate, onState }) {
+// El contenido vive en el documento Yjs de la nota (fusión de cambios entre dispositivos).
+export function createEditor(element, { ydoc, onUpdate, onState, onCreate }) {
   return new Editor({
     element,
     extensions: [
-      StarterKit.configure({ heading: { levels: [1, 2] }, codeBlock: false, code: false }),
+      StarterKit.configure({ heading: { levels: [1, 2] }, codeBlock: false, code: false, history: false }),
       Underline,
       TaskList,
       TaskItem.configure({ nested: true }),
       Image.configure({ inline: false, allowBase64: true }),
       Placeholder.configure({ placeholder: 'Escribí tu nota…' }),
+      Collaboration.configure({ document: ydoc, field: 'default' }),
     ],
     editorProps: {
       attributes: { spellcheck: 'true', autocapitalize: 'sentences', autocorrect: 'on' },
@@ -23,7 +27,9 @@ export function createEditor(element, { onUpdate, onState }) {
       scrollMargin: { top: 24, bottom: 120, left: 0, right: 0 },
       scrollThreshold: { top: 24, bottom: 120, left: 0, right: 0 },
     },
-    onUpdate: ({ editor }) => onUpdate(editor),
+    // remote = el cambio llegó de otro dispositivo (no hace falta volver a guardar el resumen)
+    onUpdate: ({ editor, transaction }) => onUpdate(editor, !!transaction.getMeta(ySyncPluginKey)?.isChangeOrigin),
+    onCreate: ({ editor }) => onCreate?.(editor),
     onTransaction: ({ editor }) => onState(editor),
   });
 }
@@ -81,4 +87,25 @@ export async function compressImage(file, max = 1280, quality = 0.8) {
   if (!url.startsWith('data:image/webp')) url = canvas.toDataURL('image/jpeg', quality);
   const kb = Math.round((url.length * 3) / 4 / 1024);
   return { url, kb };
+}
+
+// Miniatura chica para la lista (la imagen completa queda dentro de la nota).
+const thumbCache = new Map();
+export async function makeThumb(src, max = 320, quality = 0.6) {
+  if (!src) return null;
+  const key = `${src.length}:${src.slice(-64)}`;
+  if (thumbCache.has(key)) return thumbCache.get(key);
+  try {
+    const img = new window.Image();
+    img.src = src;
+    await img.decode();
+    const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * scale);
+    c.height = Math.round(img.naturalHeight * scale);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    const url = c.toDataURL('image/jpeg', quality);
+    thumbCache.set(key, url);
+    return url;
+  } catch { return null; }
 }

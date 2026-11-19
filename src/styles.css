@@ -248,3 +248,21 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0s !important; animation-duration: 0s !important; }
 }
+
+/* ===== Inicio de sesión ===== */
+#view-login { justify-content: center; }
+.login { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 24px; max-width: 420px; margin: 0 auto; text-align: center; }
+.login-icon { border-radius: 18px; box-shadow: var(--shadow); }
+.login-title { font-size: 28px; font-weight: 400; margin: 8px 0 0; }
+.login-text, .login-hint { color: var(--on-surface-variant); font-size: 14px; margin: 0 0 8px; }
+.login-hint { background: var(--surface-container); padding: 12px 16px; border-radius: 12px; }
+.filled-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; padding: 0 24px;
+  border-radius: 24px; background: var(--primary); color: var(--on-primary); font-weight: 500; font-size: 15px;
+}
+.filled-btn svg { background: #fff; border-radius: 50%; padding: 3px; width: 26px; height: 26px; }
+
+/* ===== Estado de sincronización ===== */
+#btn-sync.warn { color: #B3261E; }
+[data-scheme="dark"] #btn-sync.warn { color: #F2B8B5; }
+.edited { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 4px; }

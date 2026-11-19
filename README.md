@@ -1,19 +1,31 @@
-# Notas — Prueba de concepto, Parte 1
+# Notas — Prueba de concepto
 
-Objetivo: comprobar si una app hecha con **web + Capacitor** se siente nativa en Android y si la
-versión web se ve igual. **No tiene sincronización todavía**: cada dispositivo guarda sus notas localmente.
+App de notas con **web + Android (Capacitor)** a partir de un solo código, con sincronización entre
+dispositivos y **fusión de cambios** (Yjs + Firestore).
 
 - Web: `https://luchorcompartidos.github.io/notas/`
 - APK: en **Releases** (`notas-vX.Y.Z.apk`)
 
-## Qué incluye
+## Estado
 
-- Editor con formato (títulos, negrita, cursiva, subrayado, listas), **casillas** e **imágenes** (comprimidas a WebP, máx. 1280 px)
-- Barra de formato pegada arriba del teclado
-- Botón/gesto **Atrás** de Android, efecto ripple, vibración al tildar
-- Estilo Material 3, tema del sistema / claro / oscuro, color por nota, notas fijadas
-- Eliminar con "Deshacer"
-- Versión en el encabezado (al tocarla: fecha de la Release y link al Changelog) y aviso de versión nueva
+| Parte | Versión | Contenido |
+|---|---|---|
+| 1 | v0.0.1 | Aspecto y uso: editor con formato, casillas, imágenes, Material 3, Atrás, temas |
+| 2A | v0.0.2 | Inicio de sesión con Google (web) y sincronización con fusión de cambios |
+| 2B | v0.0.3 | Inicio de sesión nativo en Android y firma fija del APK |
+
+En la v0.0.2, la app Android funciona **sin cuenta** (notas solo en el dispositivo).
+
+## Cómo funciona la sincronización
+
+- Cada nota es un documento **Yjs**: título y contenido. Yjs combina los cambios de varios dispositivos
+  sin perder ninguno, aunque se hayan hecho sin conexión.
+- Copia local en IndexedDB: se puede editar sin conexión (con la página ya abierta).
+- Firestore:
+  - `notes/{id}`: resumen compartido (dueño, miembros, título, vista previa, casillas, miniatura)
+  - `notes/{id}/updates/*`: cambios de Yjs; se compactan cuando pasan de 40
+  - `users/{uid}/meta/{id}`: organización personal (color, fijada, papelera)
+- Las reglas de seguridad están en `firestore.rules` (se pegan en la consola de Firebase).
 
 ## Cómo se publica
 
@@ -22,19 +34,11 @@ Todo lo hace `.github/workflows/ci.yml` en cada push a `main`:
 | Marca en el mensaje del commit | Resultado |
 |---|---|
 | `[patch]`, `[minor]` o `[major]` | Web publicada + APK + **Release nueva** |
-| sin marca | Web publicada + APK de prueba (en *Actions → Artifacts*), **sin Release** (aviso en el workflow) |
+| sin marca (o `[skip release]`) | Web publicada + APK de prueba (en *Actions → Artifacts*), **sin Release** |
 
 También se puede lanzar a mano: *Actions → CI → Run workflow* y elegir el tipo de Release.
 
-## Puesta en marcha (una sola vez)
-
-1. Crear el repo público `luchorcompartidos/notas` (vacío).
-2. *Settings → Pages → Build and deployment → Source:* **GitHub Actions**.
-3. Subir todos los archivos de este proyecto (incluida la carpeta `.github`) con el mensaje de commit:
-   `Prueba de concepto Parte 1 [patch]` → crea la **v0.0.1**.
-
 ## Notas técnicas
 
-- El APK es de tipo *debug*: cada compilación usa una firma distinta, así que para instalar una versión
-  nueva puede hacer falta desinstalar la anterior. Se resuelve con una firma fija más adelante.
-- El ícono de la app es el predeterminado de Capacitor (se personaliza después).
+- El APK de la v0.0.2 todavía es *debug*. La firma fija llega en la 2B (Secrets ya cargados).
+- `config/google-services.json` es para la 2B (inicio de sesión nativo en Android).

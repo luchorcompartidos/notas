@@ -1,9 +1,12 @@
 import './styles.css';
 import { hydrateIcons, icon } from './icons.js';
-import { store, requestPersistence, newId } from './store.js';
-import { createEditor, runCommand, isActive, summarize, compressImage } from './editor.js';
+import { requestPersistence } from './store.js';
+import { createEditor, runCommand, isActive, summarize, compressImage, makeThumb } from './editor.js';
 import { initNative, setStatusBar, haptic, minimizeApp, isNative } from './native.js';
 import { APP_VERSION, CHANGELOG_URL, getLatestRelease, isNewer, formatDate } from './version.js';
+import { applyTextDiff } from './sync.js';
+import { CloudRepo, LocalRepo } from './repo.js';
+import { fb, watchAuth, signInGoogle, signOutUser, authErrorMessage } from './firebase.js';
 
 const $ = (s) => document.querySelector(s);
 const root = document.documentElement;
@@ -14,9 +17,13 @@ const COLORS = [
   ['dusk', 'Atardecer'], ['blossom', 'Flor'],
 ];
 
-const state = { notes: [], current: null, view: 'list', pushed: false, release: null };
-let editor;
-let saveTimer;
+const state = {
+  mode: null, user: null, repo: null, notes: [], current: null,
+  view: 'login', pushed: false, release: null, firstList: true,
+};
+let editor = null;
+let summaryTimer;
+let openToken = 0;
 
 /* ---------- Tema (sistema / claro / oscuro) ---------- */
 const mq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -37,7 +44,7 @@ function toHex(rgb) {
 }
 
 function syncBars() {
-  const view = state.view === 'editor' ? $('#view-editor') : $('#view-list');
+  const view = $(`#view-${state.view}`) || $('#view-list');
   const hex = toHex(getComputedStyle(view).backgroundColor);
   document.querySelector('meta[name="theme-color"]').setAttribute('content', hex);
   setStatusBar(hex, root.dataset.scheme === 'dark');
@@ -59,15 +66,14 @@ document.addEventListener('pointerdown', (e) => {
 /* ---------- Snackbar ---------- */
 let snackTimer;
 function snackbar(text, actionLabel, onAction) {
-  const bar = $('#snackbar');
   $('#snack-text').textContent = text;
   const btn = $('#snack-action');
   btn.hidden = !actionLabel;
   btn.textContent = actionLabel || '';
   btn.onclick = () => { hideSnack(); onAction?.(); };
-  bar.classList.add('show');
+  $('#snackbar').classList.add('show');
   clearTimeout(snackTimer);
-  snackTimer = setTimeout(hideSnack, actionLabel ? 5000 : 2800);
+  snackTimer = setTimeout(hideSnack, actionLabel ? 5000 : 3200);
 }
 function hideSnack() { $('#snackbar').classList.remove('show'); }
 
@@ -117,17 +123,78 @@ function closeOverlays() {
 }
 $('#scrim').addEventListener('click', closeOverlays);
 
+const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ---------- Vistas ---------- */
+function setView(view) {
+  state.view = view;
+  ['login', 'list', 'editor'].forEach((v) => $(`#view-${v}`).classList.toggle('active', v === view));
+  $('#view-list').classList.toggle('behind', view === 'editor');
+  syncBars();
+}
+
+/* ---------- Estado de sincronización ---------- */
+function updateSyncIcon() {
+  const btn = $('#btn-sync');
+  let name = 'phone'; let label = 'Sin cuenta: notas solo en este dispositivo';
+  if (state.mode === 'cloud') {
+    const repo = state.repo;
+    const sessPending = state.current?.status?.pending || 0;
+    if (repo?.error) { name = 'error'; label = 'Error de sincronización'; }
+    else if (!navigator.onLine) { name = 'cloudOff'; label = 'Sin conexión: los cambios se suben al reconectar'; }
+    else if ((repo?.pending || 0) + sessPending > 0) { name = 'cloudUp'; label = 'Sincronizando…'; }
+    else { name = 'cloudDone'; label = 'Sincronizado'; }
+  }
+  btn.innerHTML = icon(name);
+  btn.setAttribute('aria-label', label);
+  btn.title = label;
+  btn.classList.toggle('warn', name === 'error' || name === 'cloudOff');
+}
+
+function updateNoteStatus() {
+  const c = state.current;
+  if (!c) return;
+  let text = 'Guardado en este dispositivo';
+  if (state.mode === 'cloud') {
+    const st = c.status || {};
+    if (st.error) text = `Error de sincronización (${st.error.code || 'desconocido'})`;
+    else if (!navigator.onLine) text = 'Sin conexión · se sube al reconectar';
+    else if (st.pending) text = 'Sincronizando…';
+    else text = 'Sincronizado';
+  }
+  $('#sync-state').textContent = text;
+  $('#edited').textContent = c.updated && !c.isNew ? ` · Editado: ${formatDate(new Date(c.updated).toISOString())}` : '';
+  updateSyncIcon();
+}
+window.addEventListener('online', () => { updateSyncIcon(); updateNoteStatus(); });
+window.addEventListener('offline', () => { updateSyncIcon(); updateNoteStatus(); });
+
 /* ---------- Lista ---------- */
+function onList(list) {
+  state.notes = list;
+  const c = state.current;
+  if (c) {
+    const n = list.find((x) => x.id === c.id);
+    if (n) { c.color = n.color; c.pinned = n.pinned; c.updated = n.updated; paintEditorChrome(); }
+  }
+  renderList();
+  if (state.firstList && state.repo?.serverLoaded) {
+    state.firstList = false;
+    maybeWelcome();
+    const m = location.hash.match(/^#\/nota\/(.+)$/);
+    if (m && state.view !== 'editor') openNote(m[1], { push: false });
+  }
+}
+
 function renderList() {
-  const sorted = [...state.notes].sort((a, b) => b.updated - a.updated);
-  const pinned = sorted.filter((n) => n.pinned);
-  const others = sorted.filter((n) => !n.pinned);
-  const fill = (grid, list) => { grid.replaceChildren(...list.map(cardEl)); };
-  fill($('#grid-pinned'), pinned);
-  fill($('#grid-others'), others);
+  const visible = state.notes.filter((n) => !n.trashed).sort((a, b) => (b.updated || 0) - (a.updated || 0));
+  const pinned = visible.filter((n) => n.pinned);
+  const others = visible.filter((n) => !n.pinned);
+  $('#grid-pinned').replaceChildren(...pinned.map(cardEl));
+  $('#grid-others').replaceChildren(...others.map(cardEl));
   $('#pinned-wrap').hidden = pinned.length === 0;
   $('#others-label').hidden = pinned.length === 0 || others.length === 0;
-  $('#empty').hidden = sorted.length > 0;
+  $('#empty').hidden = visible.length > 0;
 }
 
 function cardEl(n) {
@@ -158,53 +225,99 @@ function cardEl(n) {
 }
 
 /* ---------- Editor ---------- */
-function blankNote() {
-  const now = Date.now();
-  return { id: newId(), title: '', content: '', color: 'default', pinned: false, created: now, updated: now, preview: '', checks: { done: 0, total: 0 }, thumb: null };
-}
-
-function setView(view) {
-  state.view = view;
-  $('#view-list').classList.toggle('active', view === 'list');
-  $('#view-list').classList.toggle('behind', view === 'editor');
-  $('#view-editor').classList.toggle('active', view === 'editor');
-  syncBars();
-}
-
 function paintEditorChrome() {
-  const n = state.current;
+  const c = state.current;
+  if (!c) return;
   const v = $('#view-editor');
-  if (n.color && n.color !== 'default') v.dataset.color = n.color; else delete v.dataset.color;
-  $('#btn-pin').classList.toggle('active', !!n.pinned);
-  $('#btn-pin').setAttribute('aria-label', n.pinned ? 'Dejar de fijar' : 'Fijar nota');
-  $('#edited').textContent = n.isNew ? '' : `Editado: ${formatDate(new Date(n.updated).toISOString())}`;
+  if (c.color && c.color !== 'default') v.dataset.color = c.color; else delete v.dataset.color;
+  $('#btn-pin').classList.toggle('active', !!c.pinned);
+  $('#btn-pin').setAttribute('aria-label', c.pinned ? 'Dejar de fijar' : 'Fijar nota');
+  updateNoteStatus();
   syncBars();
 }
 
-function openNote(id, { push = true, isNew = false } = {}) {
-  const found = id ? state.notes.find((x) => x.id === id) : null;
-  if (id && !found) return;
-  state.current = found ? { ...found } : { ...blankNote(), isNew: true };
-  $('#note-title').value = state.current.title || '';
-  editor.commands.setContent(state.current.content || '', false);
-  editor.commands.clearHistory?.();
+async function openNote(id, { push = true, isNew = false } = {}) {
+  const n = state.notes.find((x) => x.id === id);
+  if (!n && !isNew) return;
+  await closeSession();
+  const token = ++openToken;
+  const c = {
+    id, isNew, dirty: false, status: { pending: 0, error: null },
+    color: n?.color || 'default', pinned: !!n?.pinned, updated: n?.updated,
+    legacy: n?.legacy || null, seedTitle: n?.title || '',
+  };
+  state.current = c;
+  $('#note-title').value = n?.title || '';
   $('#editor-scroll').scrollTop = 0;
   paintEditorChrome();
   setView('editor');
   if (push) {
-    history.pushState({ note: state.current.id }, '', `#/nota/${state.current.id}`);
+    history.pushState({ note: id }, '', `#/nota/${id}`);
     state.pushed = true;
   }
-  if (isNew) editor.commands.focus('end');
+
+  const session = state.repo.session(id, (st) => { c.status = st; updateNoteStatus(); });
+  c.session = session;
+  await session.ready();
+  if (token !== openToken) { session.destroy(); return; }
+
+  // Notas creadas antes de la sincronización (o la de bienvenida): su contenido pasa a Yjs.
+  const needsSeed = session.isEmpty && (c.legacy || c.seedTitle);
+  if (needsSeed && c.seedTitle) applyTextDiff(session.titleText, c.seedTitle);
+  if (document.activeElement !== $('#note-title')) $('#note-title').value = session.titleText.toString();
+  else applyTextDiff(session.titleText, $('#note-title').value);
+
+  // El título se sincroniza también; si cambia en otro dispositivo, se actualiza acá.
+  c.titleObserver = (ev, tr) => {
+    if (tr.local) return;
+    const input = $('#note-title');
+    const pos = input.selectionStart;
+    input.value = session.titleText.toString();
+    if (document.activeElement === input && pos != null) input.setSelectionRange(pos, pos);
+  };
+  session.titleText.observe(c.titleObserver);
+
+  editor = createEditor($('#editor'), {
+    ydoc: session.ydoc,
+    onUpdate: (ed, remote) => { if (!remote) markDirty(); },
+    onState: (ed) => updateToolbar(ed),
+    onCreate: (ed) => {
+      if (needsSeed && c.legacy) {
+        setTimeout(() => {
+          if (token === openToken && session.fragment.length === 0) ed.commands.setContent(c.legacy, true);
+        }, 60);
+      }
+    },
+  });
+  updateToolbar(editor);
+}
+
+async function closeSession() {
+  const c = state.current;
+  if (!c) return;
+  clearTimeout(summaryTimer);
+  let empty = c.isNew && !editor && !$('#note-title').value.trim();
+  if (editor) {
+    const title = $('#note-title').value;
+    const s = summarize(editor.getJSON(), editor.getText({ blockSeparator: '\n' }));
+    empty = !title.trim() && !s.preview && !s.thumb && !s.checks.total;
+    if (c.dirty && !(empty && c.isNew)) await saveSummaryNow();
+    editor.destroy();
+    editor = null;
+  }
+  $('#editor').innerHTML = '';
+  if (c.titleObserver) c.session?.titleText.unobserve(c.titleObserver);
+  c.session?.destroy();
+  state.current = null;
+  if (empty && c.isNew) state.repo.removeCompletely(c.id);
 }
 
 async function closeEditor() {
   if (state.view !== 'editor') return;
   closeOverlays();
-  editor.commands.blur();
   $('#note-title').blur();
-  await saveNow();
-  state.current = null;
+  editor?.commands.blur();
+  await closeSession();
   setView('list');
   renderList();
 }
@@ -219,40 +332,28 @@ function goBack() {
   minimizeApp();
 }
 
-function isEmptyNote(n) {
-  return !n.title.trim() && !n.preview && !n.thumb && !(n.checks?.total);
-}
-
-function scheduleSave() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveNow, 400);
-}
-
-async function saveNow() {
-  clearTimeout(saveTimer);
-  const n = state.current;
-  if (!n || !n.dirty) return;
-  const json = editor.getJSON();
-  n.content = json;
-  n.title = $('#note-title').value;
-  Object.assign(n, summarize(json, editor.getText({ blockSeparator: '\n' })));
-  n.updated = Date.now();
-  n.dirty = false;
-  const { dirty, isNew, ...toSave } = n;
-  const idx = state.notes.findIndex((x) => x.id === n.id);
-  if (isEmptyNote(n)) {
-    if (idx >= 0) state.notes.splice(idx, 1);
-    await store.remove(n.id);
-    return;
-  }
-  if (idx >= 0) state.notes[idx] = toSave; else state.notes.push(toSave);
-  await store.put(toSave);
-}
-
 function markDirty() {
-  if (!state.current) return;
-  state.current.dirty = true;
-  scheduleSave();
+  const c = state.current;
+  if (!c) return;
+  c.dirty = true;
+  clearTimeout(summaryTimer);
+  summaryTimer = setTimeout(saveSummaryNow, 1200);
+}
+
+// Guarda el resumen que se ve en la lista (título, vista previa, casillas, miniatura).
+async function saveSummaryNow() {
+  clearTimeout(summaryTimer);
+  const c = state.current;
+  if (!c || !c.dirty || !editor) return;
+  c.dirty = false;
+  const s = summarize(editor.getJSON(), editor.getText({ blockSeparator: '\n' }));
+  const thumb = await makeThumb(s.thumb);
+  const patch = {
+    title: $('#note-title').value, preview: s.preview, checks: s.checks, thumb, updated: Date.now(),
+  };
+  if (c.legacy) { patch.legacy = null; c.legacy = null; }
+  c.updated = patch.updated;
+  state.repo.saveSummary(c.id, patch);
 }
 
 function updateToolbar(ed) {
@@ -270,6 +371,7 @@ function bindEditorUi() {
   document.querySelectorAll('#toolbar [data-cmd]').forEach((b) => {
     b.addEventListener('pointerdown', (e) => e.preventDefault());
     b.addEventListener('click', () => {
+      if (!editor) return;
       if (b.dataset.cmd === 'image') { $('#file-image').click(); return; }
       runCommand(editor, b.dataset.cmd);
     });
@@ -278,7 +380,7 @@ function bindEditorUi() {
   $('#file-image').addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file) return;
+    if (!file || !editor) return;
     try {
       const { url, kb } = await compressImage(file);
       editor.chain().focus().setImage({ src: url }).createParagraphNear().run();
@@ -288,12 +390,15 @@ function bindEditorUi() {
     }
   });
 
-  $('#note-title').addEventListener('input', markDirty);
+  $('#note-title').addEventListener('input', () => {
+    const s = state.current?.session;
+    if (s) applyTextDiff(s.titleText, $('#note-title').value);
+    markDirty();
+  });
   $('#note-title').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); editor.commands.focus('start'); }
+    if (e.key === 'Enter') { e.preventDefault(); editor?.commands.focus('start'); }
   });
 
-  // Vibración corta al tildar una casilla
   $('#editor').addEventListener('change', (e) => {
     if (e.target.matches('input[type="checkbox"]')) haptic();
   });
@@ -301,11 +406,12 @@ function bindEditorUi() {
   $('#btn-back').addEventListener('click', goBack);
 
   $('#btn-pin').addEventListener('click', () => {
-    state.current.pinned = !state.current.pinned;
+    const c = state.current;
+    c.pinned = !c.pinned;
     haptic();
     paintEditorChrome();
-    markDirty();
-    snackbar(state.current.pinned ? 'Nota fijada' : 'Nota sin fijar');
+    state.repo.setMeta(c.id, { pinned: c.pinned });
+    snackbar(c.pinned ? 'Nota fijada' : 'Nota sin fijar');
   });
 
   $('#btn-color').addEventListener('click', () => {
@@ -314,11 +420,12 @@ function bindEditorUi() {
       <button class="swatch ripple${key === cur ? ' selected' : ''}" data-color-key="${key}" ${key !== 'default' ? `data-color="${key}"` : ''} aria-label="${label}">
         ${key === 'default' ? icon('block') : ''}${key === cur ? `<span class="swatch-check">${icon('check')}</span>` : ''}
       </button>`).join('');
-    openSheet(`<h2 class="sheet-title">Color</h2><div class="swatches">${sw}</div>`, (body) => {
+    openSheet(`<h2 class="sheet-title">Color</h2><p class="sheet-text">El color es tuyo: si compartís la nota, cada persona elige el suyo.</p><div class="swatches">${sw}</div>`, (body) => {
       body.querySelectorAll('[data-color-key]').forEach((b) => b.addEventListener('click', () => {
-        state.current.color = b.dataset.colorKey;
+        const c = state.current;
+        c.color = b.dataset.colorKey;
         paintEditorChrome();
-        markDirty();
+        state.repo.setMeta(c.id, { color: c.color });
         closeOverlays();
       }));
     });
@@ -328,35 +435,23 @@ function bindEditorUi() {
     openMenu(e.currentTarget, [{ label: 'Eliminar nota', onClick: deleteCurrent }]);
   });
 
-  // Elevación de la barra superior al desplazar (como Material 3)
   [['#list-scroll', '#appbar-list'], ['#editor-scroll', '#appbar-editor']].forEach(([s, a]) => {
     $(s).addEventListener('scroll', () => $(a).classList.toggle('scrolled', $(s).scrollTop > 2), { passive: true });
   });
 
-  // Cuando aparece el teclado, asegurar que el cursor quede visible
   window.addEventListener('kbchange', () => {
-    if (state.view === 'editor' && editor.isFocused) setTimeout(() => editor.commands.scrollIntoView(), 60);
+    if (state.view === 'editor' && editor?.isFocused) setTimeout(() => editor?.commands.scrollIntoView(), 60);
   });
 }
 
+// Eliminar = mandar a la papelera (es personal; la nota no se borra para otros).
 async function deleteCurrent() {
-  const n = state.current;
-  await saveNow();
-  const saved = state.notes.find((x) => x.id === n.id);
-  state.notes = state.notes.filter((x) => x.id !== n.id);
-  await store.remove(n.id);
-  state.current = null;
-  setView('list');
-  if (state.pushed) history.back(); else history.replaceState(null, '', location.pathname + location.search);
+  const id = state.current.id;
+  state.repo.setMeta(id, { trashed: true });
+  if (state.pushed) history.back();
+  else { history.replaceState(null, '', location.pathname + location.search); closeEditor(); }
   state.pushed = false;
-  renderList();
-  if (saved) {
-    snackbar('Nota eliminada', 'Deshacer', async () => {
-      state.notes.push(saved);
-      await store.put(saved);
-      renderList();
-    });
-  }
+  snackbar('Nota enviada a la papelera', 'Deshacer', () => state.repo.setMeta(id, { trashed: false }));
 }
 
 /* ---------- Menú de la lista: tema y versión ---------- */
@@ -375,14 +470,118 @@ $('#btn-menu-list').addEventListener('click', (e) => {
 function showVersion() {
   const r = state.release;
   openSheet(`
-    <h2 class="sheet-title">Notas v${APP_VERSION}</h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Prueba de concepto, Parte 1</p>
-    <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${r.tag}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
+    <h2 class="sheet-title">Notas v${esc(APP_VERSION)}</h2>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Prueba de concepto, Parte 2A</p>
+    <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);
 }
 $('#btn-version').addEventListener('click', showVersion);
 
+/* ---------- Cuenta y sincronización ---------- */
+$('#btn-sync').addEventListener('click', () => {
+  if (state.mode === 'cloud') {
+    const u = state.user;
+    const label = $('#btn-sync').getAttribute('aria-label');
+    openSheet(`
+      <h2 class="sheet-title">Tu cuenta</h2>
+      <p class="sheet-text"><strong>${esc(u.displayName || '')}</strong><br>${esc(u.email || '')}</p>
+      <p class="sheet-text">Estado: ${esc(label)}</p>
+      <button class="text-btn ripple" id="btn-signout">Cerrar sesión</button>
+    `, (body) => body.querySelector('#btn-signout').addEventListener('click', doSignOut));
+  } else {
+    openSheet(`
+      <h2 class="sheet-title">Sin cuenta</h2>
+      <p class="sheet-text">Tus notas se guardan solo en este dispositivo y no se sincronizan.</p>
+      ${isNative
+        ? '<p class="sheet-text">El inicio de sesión en la app de Android llega en la versión 0.0.3.</p>'
+        : '<button class="text-btn ripple" id="btn-signin">Iniciar sesión con Google</button>'}
+    `, (body) => body.querySelector('#btn-signin')?.addEventListener('click', async () => {
+      try { await signInGoogle(); location.reload(); } catch (e) { const m = authErrorMessage(e); if (m) snackbar(m); }
+    }));
+  }
+});
+
+async function doSignOut() {
+  closeOverlays();
+  await closeEditor();
+  localStorage.removeItem('notas-mode');
+  await signOutUser();
+  location.replace(location.pathname);
+}
+
+/* ---------- Modos: con cuenta (nube) o sin cuenta (local) ---------- */
+function startRepo(repo, mode) {
+  state.repo = repo;
+  state.mode = mode;
+  state.firstList = true;
+  repo.onChange = () => { updateSyncIcon(); updateNoteStatus(); };
+  repo.subscribe(onList);
+  updateSyncIcon();
+  setView('list');
+}
+
+function startCloud(user) {
+  if (state.mode === 'cloud' && state.user?.uid === user.uid) return;
+  state.user = user;
+  localStorage.setItem('notas-mode', 'cloud');
+  startRepo(new CloudRepo(fb().db, user.uid), 'cloud');
+}
+
+function startLocal() {
+  if (state.mode === 'local') return;
+  localStorage.setItem('notas-mode', 'local');
+  startRepo(new LocalRepo(), 'local');
+}
+
+function showLogin() {
+  state.mode = null;
+  $('#login-native-hint').hidden = !isNative;
+  $('#btn-google').hidden = isNative;
+  setView('login');
+}
+
+$('#btn-google').addEventListener('click', async () => {
+  try { await signInGoogle(); } catch (e) { const m = authErrorMessage(e); if (m) snackbar(m); }
+});
+$('#btn-local').addEventListener('click', startLocal);
+
+/* ---------- Nota de bienvenida (guía de qué probar) ---------- */
+function maybeWelcome() {
+  const key = state.mode === 'cloud' ? `notas-welcomed-${state.user.uid}` : 'notas-welcomed';
+  if (localStorage.getItem(key)) return;
+  localStorage.setItem(key, '1');
+  if (state.notes.length) return;
+  const items = state.mode === 'cloud' ? [
+    'Abrir esta nota en la PC y en el navegador del celular (misma cuenta)',
+    'Escribir en un dispositivo y ver el cambio en el otro',
+    'Escribir al mismo tiempo en los dos, en párrafos distintos',
+    'Cortar la conexión en los dos, editar en ambos y volver a conectar',
+    'Tildar casillas en uno mientras escribís en el otro',
+    'Cambiar el título desde los dos',
+    'Agregar una imagen y verla en el otro dispositivo',
+    'Fijar la nota o cambiarle el color',
+  ] : [
+    'Escribir con tu teclado: predicción, corrector, deslizar, dictado',
+    'Dar formato con la barra de abajo (negrita, títulos, listas)',
+    'Tildar estas casillas',
+    'Agregar una imagen desde la cámara o la galería',
+    'Volver con el botón o el gesto Atrás',
+  ];
+  const intro = state.mode === 'cloud'
+    ? '<p>Esta es la <strong>Parte 2A</strong> de la prueba: sincronización con <em>fusión de cambios</em>. Lo que edites en un dispositivo aparece en los otros, y si editás sin conexión, al reconectar se combinan los cambios sin perder nada.</p>'
+    : '<p>Estás usando Notas <strong>sin cuenta</strong>: todo se guarda en este dispositivo.</p>';
+  const html = `${intro}<h2>Qué probar</h2><ul data-type="taskList">${items.map((t) => `<li data-type="taskItem" data-checked="false"><p>${t}</p></li>`).join('')}</ul>`;
+  const id = state.repo.create({
+    title: state.mode === 'cloud' ? 'Bienvenido a Notas (sincronización)' : 'Bienvenido a Notas',
+    preview: state.mode === 'cloud' ? 'Esta es la Parte 2A de la prueba: sincronización con fusión de cambios.' : 'Estás usando Notas sin cuenta.',
+    checks: { done: 0, total: items.length },
+    legacy: html,
+  });
+  state.repo.setMeta(id, { pinned: true });
+}
+
+/* ---------- Actualizaciones ---------- */
 async function checkUpdates() {
   state.release = await getLatestRelease();
   const r = state.release;
@@ -398,64 +597,48 @@ async function checkUpdates() {
   $('#update-banner').hidden = false;
 }
 
-/* ---------- Nota de bienvenida (guía de qué probar) ---------- */
-function welcomeNote() {
-  const items = [
-    'Escribir con tu teclado: predicción, corrector, deslizar, dictado',
-    'Dar formato con la barra de abajo (negrita, títulos, listas)',
-    'Tildar estas casillas (sentí la vibración)',
-    'Agregar una imagen desde la cámara o la galería',
-    'Ver que la barra quede justo arriba del teclado',
-    'Volver con el botón o el gesto Atrás',
-    'Cambiar el color de la nota y fijarla',
-    'Probar el tema claro y el oscuro (menú ⋮ de la lista)',
-  ];
-  const n = blankNote();
-  n.title = 'Bienvenido a Notas (prueba)';
-  n.content = `<p>Esta es la <strong>Parte 1</strong> de la prueba de concepto: solo aspecto y uso, <em>sin sincronización</em>. Todo se guarda en este dispositivo.</p><h2>Qué probar</h2><ul data-type="taskList">${items.map((t) => `<li data-type="taskItem" data-checked="false"><p>${t}</p></li>`).join('')}</ul><p>Cuando termines, anotá qué se sintió "poco nativo".</p>`;
-  n.preview = 'Esta es la Parte 1 de la prueba de concepto: solo aspecto y uso, sin sincronización.';
-  n.checks = { done: 0, total: items.length };
-  n.pinned = true;
-  return n;
-}
-
 /* ---------- Inicio ---------- */
-async function init() {
+function init() {
   hydrateIcons();
   applyTheme();
   requestPersistence();
-
-  editor = createEditor($('#editor'), {
-    onUpdate: () => markDirty(),
-    onState: (ed) => updateToolbar(ed),
-  });
   bindEditorUi();
   initNative({ onBack: goBack });
 
-  $('#fab').addEventListener('click', () => { haptic(); openNote(null, { isNew: true }); });
+  $('#fab').addEventListener('click', () => {
+    if (!state.repo) return;
+    haptic();
+    const id = state.repo.create();
+    // Mostrar el editor y enfocar el título dentro del mismo toque: así el teclado se abre en el celular.
+    $('#note-title').value = '';
+    delete $('#view-editor').dataset.color;
+    setView('editor');
+    $('#note-title').focus();
+    openNote(id, { isNew: true });
+  });
 
   window.addEventListener('popstate', () => {
     closeOverlays();
     const m = location.hash.match(/^#\/nota\/(.+)$/);
-    if (m) { if (state.view !== 'editor') { openNote(m[1], { push: false }); state.pushed = false; } }
+    if (m) { if (state.view !== 'editor' && state.repo) { openNote(m[1], { push: false }); state.pushed = false; } }
     else if (state.view === 'editor') { state.pushed = false; closeEditor(); }
   });
 
-  // Guardar si la app pasa a segundo plano
-  document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
+  // Antes de pasar a segundo plano: subir lo pendiente.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { saveSummaryNow(); state.current?.session?.flush(); }
+  });
 
-  state.notes = await store.all();
-  if (!state.notes.length && !localStorage.getItem('notas-welcomed')) {
-    const w = welcomeNote();
-    state.notes.push(w);
-    await store.put(w);
-    localStorage.setItem('notas-welcomed', '1');
+  if (isNative) {
+    // Parte 2A: en el APK todavía no hay inicio de sesión (llega en la 0.0.3).
+    if (localStorage.getItem('notas-mode') === 'local') startLocal(); else showLogin();
+  } else {
+    watchAuth((user) => {
+      if (user) startCloud(user);
+      else if (localStorage.getItem('notas-mode') === 'local') startLocal();
+      else showLogin();
+    });
   }
-  renderList();
-
-  const m = location.hash.match(/^#\/nota\/(.+)$/);
-  if (m) openNote(m[1], { push: false });
-
   checkUpdates();
 }
 
