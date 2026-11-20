@@ -9,6 +9,7 @@ import * as Y from 'yjs';
 import { generateHTML, generateJSON } from '@tiptap/core';
 import {
   toText, toMarkdown, toDocx, toPdf, toBackup, deliverFile, safeName, readImport, resolveImages,
+  toWhatsApp, noteImages, shareMessage, shareFile,
 } from './transfer.js';
 import { verifyUser } from './lock.js';
 import { getPreview, domainOf, previewsEnabled, setPreviewsEnabled } from './links.js';
@@ -801,6 +802,7 @@ function bindEditorUi() {
       { divider: true },
       { label: c.archived ? 'Desarchivar' : 'Archivar', onClick: () => { const id = c.id; const v = !c.archived; goBack(); archiveNotes([id], v); } },
       { label: 'Historial de versiones', onClick: () => showVersions(c.id) },
+      { label: 'Enviar… (WhatsApp, mail)', onClick: () => openSendSheet([c.id]) },
       { label: 'Exportar…', onClick: () => openExportSheet([c.id]) },
       { label: (noteById(c.id)?.locked ? 'Quitar el bloqueo' : 'Bloquear con huella'), onClick: () => setLocked([c.id], !noteById(c.id)?.locked) },
       { label: 'Copiar nota', onClick: async () => { await saveSummaryNow(); copyNotes([c.id]); } },
@@ -867,7 +869,7 @@ function showVersion() {
   const r = state.release;
   openSheet(`
     <h2 class="sheet-title">Notas v${esc(APP_VERSION)}</h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 5: robustez y datos</p>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 5: robustez y datos · Enviar</p>
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);
@@ -1410,6 +1412,7 @@ function renderSelectActions() {
       ...(f.kind === 'templates' && ids.length === 1 ? [{ label: 'Usar plantilla', onClick: () => { useTemplate(ids[0]); clearSelection(); } }] : []),
       ...(f.kind !== 'templates' ? [{ label: ids.length > 1 ? 'Guardar como plantillas' : 'Guardar como plantilla', onClick: () => { copyNotes(ids, { asTemplate: true }); clearSelection(); } }] : []),
       { label: ids.length > 1 ? `Copiar ${ids.length} notas` : 'Copiar nota', onClick: () => { copyNotes(ids); clearSelection(); } },
+      { label: 'Enviar… (WhatsApp, mail)', onClick: () => { openSendSheet(ids); clearSelection(); } },
       { label: 'Exportar…', onClick: () => { openExportSheet(ids); clearSelection(); } },
       { label: notes.every((n) => n.locked) ? 'Quitar el bloqueo' : 'Bloquear con huella', onClick: () => { setLocked(ids, !notes.every((n) => n.locked)); clearSelection(); } },
       ...(f.kind === 'folder' ? [{ label: 'Quitar de esta carpeta', onClick: () => { removeFromFolder(ids, f.id); clearSelection(); } }] : []),
@@ -2335,6 +2338,63 @@ async function exportNotes(ids, fmt) {
   } catch (e) {
     console.error('Exportar', e);
     snackbar(`No se pudo exportar (${e?.message || 'error'})`);
+  }
+}
+
+
+/* --- Enviar (WhatsApp, Telegram, mail…) --- */
+const SEND_OPTIONS = [
+  ['text', 'Como mensaje de texto', 'Con formato de WhatsApp: negrita, listas y casillas ☐/☑'],
+  ['textimg', 'Mensaje con sus imágenes', 'El texto acompaña a las fotos de la nota'],
+  ['pdf', 'Como documento PDF', 'Llega como documento adjunto'],
+  ['docx', 'Como documento Word (.docx)', 'Llega como documento adjunto, editable'],
+  ['txt', 'Como archivo de texto (.txt)', 'Llega como documento adjunto'],
+];
+
+function openSendSheet(ids) {
+  const many = ids.length > 1;
+  openSheet(`<h2 class="sheet-title">Enviar ${many ? `${ids.length} notas` : 'nota'}</h2>
+    <p class="sheet-text">Se abre el menú para compartir: elegí WhatsApp (o Telegram, mail…) y el chat.</p>
+    <div class="picker-list">${SEND_OPTIONS.map(([k, label, hint]) => `
+      <button class="picker-item ripple" data-send="${k}">${icon(k.startsWith('text') ? 'mail' : 'download')}
+        <span class="rem-text"><strong>${label}</strong><small>${hint}</small></span></button>`).join('')}</div>`, (body) => {
+    body.querySelectorAll('[data-send]').forEach((b) => b.addEventListener('click', async () => {
+      closeOverlays();
+      if (!(await unlockForExport(ids))) return;
+      await sendNotes(ids, b.dataset.send);
+    }));
+  });
+}
+
+async function sendNotes(ids, how) {
+  snackbar('Preparando…');
+  try {
+    if (state.current && ids.includes(state.current.id)) await saveSummaryNow();
+    const notes = [];
+    for (const id of ids) { const n = noteById(id); if (n) notes.push(await noteForExport(n)); }
+    if (!notes.length) return;
+    if (how === 'text' || how === 'textimg') {
+      const text = notes.map(toWhatsApp).join('\n\n———\n\n');
+      const images = how === 'textimg' ? notes.flatMap(noteImages).slice(0, 10) : [];
+      if (how === 'textimg' && !images.length) snackbar('La nota no tiene imágenes: se envía solo el texto');
+      const r = await shareMessage({ title: notes[0].title || 'Nota', text, images });
+      if (r === 'copied') {
+        snackbar('Texto copiado. Pegalo en el chat', 'Abrir WhatsApp', () => window.open(`https://wa.me/?text=${encodeURIComponent(text.slice(0, 4000))}`, '_blank'));
+      } else hideSnack();
+      return;
+    }
+    const day = new Date().toISOString().slice(0, 10);
+    const base = notes.length === 1 ? safeName(notes[0].title) : `notas-${day}`;
+    let blob;
+    if (how === 'pdf') blob = await toPdf(notes);
+    else if (how === 'docx') blob = await toDocx(notes);
+    else blob = new Blob([notes.map(toText).join('\n\n----------\n\n')], { type: 'text/plain' });
+    const r = await shareFile(`${base}.${how}`, blob);
+    if (r === 'downloaded') snackbar('Este navegador no permite compartir archivos: se descargó para adjuntarlo en el chat');
+    else hideSnack();
+  } catch (e) {
+    console.error('Enviar', e);
+    snackbar(`No se pudo enviar (${e?.message || 'error'})`);
   }
 }
 

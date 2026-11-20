@@ -344,3 +344,100 @@ export async function readImport(file) {
   if (ext === 'pdf') return [{ title: baseName(file), html: await pdfToHtml(file) }];
   throw new Error(`Formato no compatible: .${ext}`);
 }
+
+/* ---------- Enviar (WhatsApp, Telegram, mail…) ---------- */
+// Texto con el formato de WhatsApp: *negrita*, _cursiva_, ~tachado~, listas y casillas ☐ / ☑
+function waInline(n) {
+  if (n.type === 'hardBreak') return '\n';
+  if (n.type !== 'text') return (n.content || []).map(waInline).join('');
+  let t = n.text || '';
+  const marks = (n.marks || []).map((m) => m.type);
+  const wrap = (s, ch) => s.replace(/^(\s*)(.*?)(\s*)$/s, (_, a, b, c) => (b ? `${a}${ch}${b}${ch}${c}` : _));
+  if (marks.includes('bold')) t = wrap(t, '*');
+  if (marks.includes('italic')) t = wrap(t, '_');
+  if (marks.includes('strike')) t = wrap(t, '~');
+  const link = (n.marks || []).find((m) => m.type === 'link');
+  if (link && link.attrs.href !== n.text) t = `${t} (${link.attrs.href})`;
+  return t;
+}
+
+function blocksToWa(nodes, depth = 0) {
+  const out = [];
+  for (const n of nodes || []) {
+    const pad = '   '.repeat(depth);
+    if (n.type === 'paragraph') out.push(pad + (n.content || []).map(waInline).join(''));
+    else if (n.type === 'heading') out.push('', `*${inline(n).trim()}*`);
+    else if (n.type === 'blockquote') out.push(...blocksToWa(n.content, depth).map((l) => `> ${l}`));
+    else if (n.type === 'horizontalRule') out.push('———');
+    else if (['bulletList', 'orderedList', 'taskList'].includes(n.type)) {
+      let num = 0;
+      for (const item of n.content || []) {
+        num++;
+        const mark = n.type === 'bulletList' ? '•' : n.type === 'orderedList' ? `${num}.` : (item.attrs?.checked ? '☑' : '☐');
+        const [first, ...rest] = item.content || [];
+        out.push(`${pad}${mark} ${first ? (first.content || []).map(waInline).join('') : ''}`);
+        out.push(...blocksToWa(rest, depth + 1));
+      }
+    }
+  }
+  return out;
+}
+
+export function toWhatsApp(note) {
+  const body = blocksToWa(note.json?.content).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return note.title ? `*${note.title.trim()}*\n\n${body}` : body;
+}
+
+export function noteImages(note) {
+  const list = [];
+  const walk = (n) => { if (n.type === 'image' && n.attrs?.src?.startsWith('data:')) list.push(n.attrs.src); (n.content || []).forEach(walk); };
+  walk(note.json || {});
+  return list;
+}
+
+async function jpegFile(src, name) {
+  const r = await rasterize(src, 'image/jpeg', 1600);
+  return { name, url: r.url };
+}
+
+// Abre el menú de compartir con texto (y las imágenes de la nota, si se piden)
+export async function shareMessage({ title, text, images = [] }) {
+  if (isNative) {
+    const fs = await import('@capacitor/filesystem');
+    const sh = await import('@capacitor/share');
+    const files = [];
+    for (const [i, src] of images.entries()) {
+      const f = await jpegFile(src, `imagen-${i + 1}.jpg`);
+      const res = await fs.Filesystem.writeFile({ path: f.name, data: f.url.split(',')[1], directory: fs.Directory.Cache });
+      files.push(res.uri);
+    }
+    await sh.Share.share({ title, text, dialogTitle: 'Enviar nota', ...(files.length ? { files } : {}) });
+    return 'shared';
+  }
+  // Web: menú de compartir del sistema si existe (celular, Windows); si no, copiar y abrir WhatsApp
+  if (navigator.share) {
+    const data = { title, text };
+    if (images.length && navigator.canShare) {
+      const files = [];
+      for (const [i, src] of images.entries()) {
+        const f = await jpegFile(src, `imagen-${i + 1}.jpg`);
+        files.push(new File([b64ToBytes(f.url)], f.name, { type: 'image/jpeg' }));
+      }
+      if (navigator.canShare({ files })) data.files = files;
+    }
+    try { await navigator.share(data); return 'shared'; } catch (e) { if (e?.name === 'AbortError') return 'cancel'; }
+  }
+  try { await navigator.clipboard.writeText(text); } catch { /* sin portapapeles */ }
+  return 'copied';
+}
+
+// Envía un archivo ya exportado (WhatsApp lo manda como documento adjunto)
+export async function shareFile(filename, blob) {
+  if (isNative) { await deliverFile(filename, blob); return 'shared'; }
+  const file = new File([blob], filename, { type: blob.type });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: filename }); return 'shared'; } catch (e) { if (e?.name === 'AbortError') return 'cancel'; }
+  }
+  await deliverFile(filename, blob);
+  return 'downloaded';
+}
