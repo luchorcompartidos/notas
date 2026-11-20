@@ -16,7 +16,9 @@ const native = Capacitor.isNativePlatform();
 
 // En el APK, Google bloquea iniciar sesión dentro del WebView: se usa el inicio de sesión
 // nativo de Android (plugin) y el token resultante se pasa al SDK web de Firebase.
-const nativeAuth = () => import('@capacitor-firebase/authentication').then((m) => m.FirebaseAuthentication);
+// Importante: un plugin de Capacitor nunca se devuelve dentro de una promesa (se toma como
+// "thenable" y la llamada queda colgada). Se devuelve el módulo y se usa el plugin desde ahí.
+const nativeAuthModule = () => import('@capacitor-firebase/authentication');
 
 export function fb() {
   if (!app) {
@@ -35,7 +37,7 @@ export function watchAuth(cb) {
 
 export async function signInGoogle() {
   if (native) {
-    const FirebaseAuthentication = await nativeAuth();
+    const { FirebaseAuthentication } = await nativeAuthModule();
     let res;
     const t0 = Date.now();
     try {
@@ -60,7 +62,9 @@ export async function signInGoogle() {
 export async function signOutUser() {
   const { auth: a, db: d } = fb();
   await signOut(a);
-  if (native) { try { await (await nativeAuth()).signOut(); } catch { /* nada */ } }
+  if (native) {
+    try { const { FirebaseAuthentication } = await nativeAuthModule(); await FirebaseAuthentication.signOut(); } catch { /* nada */ }
+  }
   try { await terminate(d); await clearIndexedDbPersistence(d); } catch { /* se limpia al recargar */ }
 }
 
