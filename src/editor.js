@@ -71,7 +71,7 @@ export function summarize(json, text) {
     node.content?.forEach(walk);
   };
   walk(json);
-  return { preview: text.trim().slice(0, 500), checks: { done, total }, thumb };
+  return { preview: text.trim().slice(0, 500), text: text.trim().slice(0, 20000), checks: { done, total }, thumb };
 }
 
 // Reduce la foto (máx. 1280 px, WebP) para que pese poco: pensado para guardarla luego en Firestore.

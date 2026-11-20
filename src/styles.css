@@ -383,3 +383,37 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
 .radio.on { border-color: var(--primary); }
 .radio.on::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--primary); }
 .sheet-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+
+/* ===== Fase 1B: buscar y ordenar ===== */
+/* Mosaico por columnas (el orden se lee por filas) y vista de lista */
+.grid { columns: auto !important; display: flex; align-items: flex-start; gap: 8px; }
+.grid-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+.grid.list { flex-direction: column; max-width: 720px; margin: 0 auto; }
+.grid.list .grid-col { width: 100%; }
+.grid .card { margin: 0 0 8px; }
+
+/* Búsqueda */
+.search-bar { gap: 0; padding-right: 8px; }
+.search-input {
+  flex: 1; min-width: 0; height: 48px; padding: 0 16px; border: 0; border-radius: 24px; outline: none;
+  background: var(--surface-container-high); color: var(--on-surface); font: inherit; font-size: 16px;
+}
+.search-input::-webkit-search-cancel-button { display: none; }
+.search-filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-top: 0; }
+.search-filters::-webkit-scrollbar { display: none; }
+.filter-chip { flex: 0 0 auto; padding: 0 8px 0 12px; }
+.filter-chip svg { width: 18px; height: 18px; }
+.filter-chip.on { background: var(--secondary-container); color: var(--on-secondary-container); border-color: transparent; }
+.menu { max-height: 60vh; overflow-y: auto; }
+
+/* Orden manual */
+.card-drag {
+  position: absolute; top: 4px; right: 4px; z-index: 2; width: 32px; height: 32px; border-radius: 50%;
+  display: grid; place-items: center; color: var(--on-surface-variant); touch-action: none; cursor: grab;
+}
+.card-drag svg { width: 20px; height: 20px; }
+.card:has(.card-drag) .card-title, .card:has(.card-drag) .card-text:first-of-type { padding-right: 28px; }
+.drag-ghost { position: fixed !important; z-index: 60; margin: 0 !important; pointer-events: none; opacity: .92; box-shadow: var(--shadow); transform: rotate(1.5deg); }
+.drag-source { opacity: .35; }
+.card.drop-before { box-shadow: 0 -3px 0 0 var(--primary); }
+.card.drop-after { box-shadow: 0 3px 0 0 var(--primary); }

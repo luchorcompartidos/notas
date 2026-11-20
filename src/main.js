@@ -26,7 +26,11 @@ const state = {
   selection: new Set(),
   expanded: new Set(JSON.parse(localStorage.getItem('notas-expanded') || '[]')),
   purged: false,
+  search: { active: false, q: '', folder: null, label: null, color: null, checks: null, days: null, archived: false },
+  layout: localStorage.getItem('notas-layout') || 'grid',
 };
+
+const SORTS = [['updated', 'Fecha de modificación'], ['created', 'Fecha de creación'], ['title', 'Título (A-Z)'], ['manual', 'Manual (arrastrar)']];
 
 const LABEL_COLORS = ['#E53935', '#FB8C00', '#FDD835', '#43A047', '#00ACC1', '#1E88E5', '#8E24AA', '#6D4C41', '#757575'];
 const TRASH_OPTIONS = [[7, '7 días'], [15, '15 días'], [30, '30 días'], [60, '60 días'], [90, '90 días'], [0, 'Nunca (vaciar a mano)']];
@@ -214,6 +218,8 @@ const noteLabels = (n) => (n?.labels || []).filter((id) => labelById(id));
 
 /* ---------- Vistas de la lista (Notas, carpeta, etiqueta, Archivo, Papelera) ---------- */
 function matchesFilter(n, f = state.filter) {
+  if (f.kind === 'templates') return !!n.template && !n.trashed;
+  if (n.template && f.kind !== 'trash') return false;
   switch (f.kind) {
     case 'archive': return n.archived && !n.trashed;
     case 'trash': return n.trashed;
@@ -225,6 +231,7 @@ function matchesFilter(n, f = state.filter) {
 
 function filterTitle(f = state.filter) {
   if (f.kind === 'archive') return 'Archivo';
+  if (f.kind === 'templates') return 'Plantillas';
   if (f.kind === 'trash') return 'Papelera';
   if (f.kind === 'folder') return folderPath(f.id) || 'Carpeta';
   if (f.kind === 'label') return labelById(f.id)?.name || 'Etiqueta';
@@ -276,31 +283,74 @@ function onOrg(org) {
   maybePurge();
 }
 
+function sortNotes(list) {
+  const mode = state.org.settings.sort || 'updated';
+  const title = (n) => (n.title || n.preview || '').trim();
+  const cmp = {
+    updated: (a, b) => (b.updated || 0) - (a.updated || 0),
+    created: (a, b) => (b.created || 0) - (a.created || 0),
+    title: (a, b) => title(a).localeCompare(title(b), 'es', { sensitivity: 'base', numeric: true }),
+    // Las notas sin orden manual (nuevas) van primero, de la más nueva a la más vieja
+    manual: (a, b) => (a.order ?? -(a.created || 0)) - (b.order ?? -(b.created || 0)),
+  }[mode] || ((a, b) => (b.updated || 0) - (a.updated || 0));
+  return [...list].sort(cmp);
+}
+
+const manualMode = () => (state.org.settings.sort === 'manual') && !state.search.active && state.filter.kind !== 'trash';
+
+// Cuadrícula tipo "mosaico": columnas que se llenan de izquierda a derecha (el orden se lee por filas)
+function columnCount() {
+  const w = $('#list-scroll').clientWidth || window.innerWidth;
+  if (state.layout === 'list') return 1;
+  return w >= 1100 ? 4 : w >= 760 ? 3 : 2;
+}
+
+function fillGrid(grid, notes) {
+  const n = columnCount();
+  grid.classList.toggle('list', state.layout === 'list');
+  const cols = Array.from({ length: n }, () => { const c = document.createElement('div'); c.className = 'grid-col'; return c; });
+  notes.forEach((note, i) => cols[i % n].appendChild(cardEl(note)));
+  grid.replaceChildren(...cols);
+  grid.dataset.ids = notes.map((x) => x.id).join(',');
+}
+
 function renderList() {
   const f = state.filter;
-  const visible = state.notes.filter((n) => matchesFilter(n)).sort((a, b) => (b.updated || 0) - (a.updated || 0));
-  const usePinned = !['archive', 'trash'].includes(f.kind);
+  const searching = state.search.active;
+  const visible = sortNotes(state.notes.filter((n) => (searching ? matchesSearch(n) : matchesFilter(n))));
+  const usePinned = !searching && !['archive', 'trash', 'templates'].includes(f.kind);
   const pinned = usePinned ? visible.filter((n) => n.pinned) : [];
   const others = usePinned ? visible.filter((n) => !n.pinned) : visible;
 
   $('#list-title').textContent = filterTitle();
-  $('#grid-pinned').replaceChildren(...pinned.map(cardEl));
-  $('#grid-others').replaceChildren(...others.map(cardEl));
+  fillGrid($('#grid-pinned'), pinned);
+  fillGrid($('#grid-others'), others);
   $('#pinned-wrap').hidden = pinned.length === 0;
   $('#others-label').hidden = pinned.length === 0 || others.length === 0;
-  $('#fab').hidden = ['archive', 'trash'].includes(f.kind);
+  $('#fab').hidden = searching || ['archive', 'trash'].includes(f.kind);
+  $('#btn-layout').innerHTML = icon(state.layout === 'list' ? 'viewGrid' : 'viewList');
+  $('#btn-layout').setAttribute('aria-label', state.layout === 'list' ? 'Ver en cuadrícula' : 'Ver en lista');
 
   // Aviso de la vista
   const note = $('#view-note');
-  if (f.kind === 'trash') {
+  if (searching) {
+    note.textContent = visible.length === 1 ? '1 resultado' : `${visible.length} resultados`;
+    note.hidden = false;
+  } else if (f.kind === 'trash') {
     const d = state.org.settings.trashDays;
     note.textContent = d > 0 ? `Las notas de la papelera se eliminan definitivamente a los ${d} días.` : 'La papelera no se vacía sola: se vacía a mano.';
+    note.hidden = false;
+  } else if (f.kind === 'templates') {
+    note.textContent = 'Las plantillas no aparecen en tus notas. Para usar una, mantenela presionada o abrila y elegí «Usar esta plantilla».';
+    note.hidden = false;
+  } else if (manualMode() && visible.length > 1) {
+    note.textContent = 'Orden manual: arrastrá cada nota desde su manija.';
     note.hidden = false;
   } else note.hidden = true;
 
   // Subcarpetas de la carpeta actual
   const chips = $('#folder-children');
-  if (f.kind === 'folder') {
+  if (f.kind === 'folder' && !searching) {
     chips.innerHTML = childrenOf(f.id).map((c) => `<button class="chip ripple" data-folder="${esc(c.id)}">${icon('folder')}<span>${esc(c.name)}</span></button>`).join('')
       + `<button class="chip chip-outline ripple" data-new-sub="1">${icon('folderAdd')}<span>Subcarpeta</span></button>`;
     chips.hidden = false;
@@ -311,8 +361,9 @@ function renderList() {
   const emptyTexts = {
     notes: 'Las notas que crees aparecen acá', archive: 'Las notas archivadas aparecen acá',
     trash: 'No hay notas en la papelera', folder: 'Esta carpeta no tiene notas', label: 'No hay notas con esta etiqueta',
+    templates: 'Todavía no hay plantillas. Creá una con el botón +, o desde una nota: menú ⋮ → «Guardar como plantilla».',
   };
-  $('#empty-text').textContent = emptyTexts[f.kind] || emptyTexts.notes;
+  $('#empty-text').textContent = searching ? 'No se encontraron notas' : (emptyTexts[f.kind] || emptyTexts.notes);
   $('#empty').hidden = visible.length > 0;
 
   // La selección solo conserva notas visibles
@@ -377,6 +428,14 @@ function cardEl(n) {
     el.appendChild(row);
   }
 
+  if (manualMode()) {
+    const h = document.createElement('button');
+    h.className = 'card-drag';
+    h.setAttribute('aria-label', 'Arrastrar para ordenar');
+    h.innerHTML = icon('drag');
+    el.appendChild(h);
+    attachDrag(h, el, n);
+  }
   attachPress(el, n);
   el.addEventListener('keydown', (e) => { if (e.key === 'Enter') openNote(n.id); });
   return el;
@@ -443,6 +502,7 @@ async function openNote(id, { push = true, isNew = false, meta = {} } = {}) {
     color: n?.color || 'default', pinned: !!n?.pinned, updated: n?.updated,
     legacy: n?.legacy || null, seedTitle: n?.title || '',
     folders: n?.folders || [], labels: n?.labels || [], archived: !!n?.archived, trashed: !!n?.trashed,
+    template: !!n?.template,
     ...meta,
   };
   state.current = c;
@@ -530,6 +590,7 @@ function goBack() {
     return;
   }
   if (state.selection.size) { clearSelection(); return; }
+  if (state.search.active) { closeSearch(); return; }
   if (state.view === 'list' && state.filter.kind !== 'notes') {
     const f = state.filter;
     const parent = f.kind === 'folder' ? folderById(f.id)?.parentId : null;
@@ -556,7 +617,7 @@ async function saveSummaryNow() {
   const s = summarize(editor.getJSON(), editor.getText({ blockSeparator: '\n' }));
   const thumb = await makeThumb(s.thumb);
   const patch = {
-    title: $('#note-title').value, preview: s.preview, checks: s.checks, thumb, updated: Date.now(),
+    title: $('#note-title').value, preview: s.preview, text: s.text, checks: s.checks, thumb, updated: Date.now(),
   };
   if (c.legacy) { patch.legacy = null; c.legacy = null; }
   c.updated = patch.updated;
@@ -642,6 +703,9 @@ function bindEditorUi() {
       { divider: true },
       { label: c.archived ? 'Desarchivar' : 'Archivar', onClick: () => { const id = c.id; const v = !c.archived; goBack(); archiveNotes([id], v); } },
       { label: 'Copiar nota', onClick: async () => { await saveSummaryNow(); copyNotes([c.id]); } },
+      c.template
+        ? { label: 'Usar esta plantilla', onClick: async () => { await saveSummaryNow(); const id = c.id; goBack(); setTimeout(() => useTemplate(id), 250); } }
+        : { label: 'Guardar como plantilla', onClick: async () => { await saveSummaryNow(); copyNotes([c.id], { asTemplate: true }); } },
       { label: 'Enviar a la papelera', onClick: deleteCurrent },
     ];
     openMenu(e.currentTarget, items);
@@ -684,6 +748,9 @@ $('#btn-menu-list').addEventListener('click', (e) => {
   ] : [];
   openMenu(e.currentTarget, [
     ...ctx,
+    { label: 'Ordenar por…', onClick: showSortSheet },
+    { label: 'Nueva nota desde plantilla…', onClick: pickTemplate },
+    { divider: true },
     { label: 'Tema del sistema', checked: pref === 'system', onClick: () => setTheme('system') },
     { label: 'Tema claro', checked: pref === 'light', onClick: () => setTheme('light') },
     { label: 'Tema oscuro', checked: pref === 'dark', onClick: () => setTheme('dark') },
@@ -696,7 +763,7 @@ function showVersion() {
   const r = state.release;
   openSheet(`
     <h2 class="sheet-title">Notas v${esc(APP_VERSION)}</h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 1A: organización</p>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 1B: buscar y ordenar</p>
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);
@@ -926,7 +993,8 @@ function renderDrawer() {
     <div class="drawer-section"><span>Etiquetas</span><button class="icon-btn small ripple" id="drawer-new-label" aria-label="Nueva etiqueta">${icon('add')}</button></div>
     ${labels.join('') || '<p class="drawer-empty">Todavía no hay etiquetas</p>'}
     <div class="drawer-divider"></div>
-    ${item('archive', null, icon('archive'), `Archivo (${count((n) => n.archived && !n.trashed)})`)}
+    ${item('templates', null, icon('template'), `Plantillas (${count((n) => n.template && !n.trashed)})`)}
+    ${item('archive', null, icon('archive'), `Archivo (${count((n) => n.archived && !n.trashed && !n.template)})`)}
     ${item('trash', null, icon('delete'), `Papelera (${count((n) => n.trashed)})`)}
     <div class="drawer-divider"></div>
     <div class="drawer-item"><button class="drawer-link ripple" id="drawer-settings">${icon('settings')}<span class="drawer-label">Plazo de la papelera</span></button></div>
@@ -1148,9 +1216,10 @@ function removeFromFolder(ids, folderId) {
 }
 
 // Copiar: crea notas nuevas e independientes con el mismo contenido y la misma organización
-async function copyNotes(ids) {
-  snackbar(ids.length > 1 ? 'Copiando notas…' : 'Copiando nota…');
+async function copyNotes(ids, { asTemplate = false, fromTemplate = false, meta = null, quiet = false } = {}) {
+  if (!quiet) snackbar(ids.length > 1 ? 'Copiando notas…' : 'Copiando nota…');
   let ok = 0; let big = 0;
+  const created = [];
   for (const id of ids) {
     const n = noteById(id);
     if (!n) continue;
@@ -1162,14 +1231,18 @@ async function copyNotes(ids) {
       const legacy = json?.content?.length ? json : (n.legacy || '');
       if (JSON.stringify(legacy).length > 700000) { big++; continue; }
       const nid = state.repo.create({
-        title, preview: n.preview || '', checks: n.checks || { done: 0, total: 0 }, thumb: n.thumb || null, legacy,
+        title, preview: n.preview || '', text: n.text || '', checks: n.checks || { done: 0, total: 0 }, thumb: n.thumb || null, legacy,
       });
-      state.repo.setMeta(nid, { color: n.color || 'default', labels: n.labels || [], folders: n.folders || [] });
+      if (asTemplate) state.repo.setMeta(nid, { template: true, color: n.color || 'default' });
+      else if (fromTemplate) state.repo.setMeta(nid, { color: n.color || 'default', ...(meta || {}) });
+      else state.repo.setMeta(nid, { color: n.color || 'default', labels: n.labels || [], folders: n.folders || [] });
+      created.push({ id: nid, title });
       ok++;
     } finally { s.destroy(); }
   }
   if (big) snackbar(`${ok ? `${ok} copiada${ok > 1 ? 's' : ''}. ` : ''}${big} nota${big > 1 ? 's' : ''} con muchas imágenes no se pudo copiar (llega en la Fase 5).`);
-  else snackbar(ok > 1 ? `${ok} notas copiadas` : 'Nota copiada');
+  else if (!quiet) snackbar(asTemplate ? (ok > 1 ? `${ok} plantillas guardadas` : 'Plantilla guardada') : (ok > 1 ? `${ok} notas copiadas` : 'Nota copiada'));
+  return created;
 }
 
 /* ---------- Selección múltiple ---------- */
@@ -1183,7 +1256,9 @@ const selectedIds = () => [...state.selection];
 function updateSelectionUi() {
   const on = state.selection.size > 0;
   $('#appbar-select').hidden = !on;
-  $('#appbar-list').hidden = on;
+  $('#appbar-list').hidden = on || state.search.active;
+  $('#appbar-search').hidden = on || !state.search.active;
+  $('#search-filters').hidden = on || !state.search.active;
   root.classList.toggle('selecting', on);
   $('#select-count').textContent = String(state.selection.size);
   document.querySelectorAll('.card').forEach((c) => c.classList.toggle('selected', state.selection.has(c.dataset.id)));
@@ -1216,6 +1291,8 @@ function renderSelectActions() {
       btn('delete', 'Enviar a la papelera', () => { trashNotes(ids); clearSelection(); }),
     ];
     more = [
+      ...(f.kind === 'templates' && ids.length === 1 ? [{ label: 'Usar plantilla', onClick: () => { useTemplate(ids[0]); clearSelection(); } }] : []),
+      ...(f.kind !== 'templates' ? [{ label: ids.length > 1 ? 'Guardar como plantillas' : 'Guardar como plantilla', onClick: () => { copyNotes(ids, { asTemplate: true }); clearSelection(); } }] : []),
       { label: ids.length > 1 ? `Copiar ${ids.length} notas` : 'Copiar nota', onClick: () => { copyNotes(ids); clearSelection(); } },
       ...(f.kind === 'folder' ? [{ label: 'Quitar de esta carpeta', onClick: () => { removeFromFolder(ids, f.id); clearSelection(); } }] : []),
       selectAll,
@@ -1270,6 +1347,221 @@ function maybePurge() {
   });
 }
 
+/* ---------- Fase 1B: búsqueda con filtros ---------- */
+const normalize = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+function matchesSearch(n) {
+  const s = state.search;
+  if (n.trashed || n.template) return false;
+  if (n.archived && !s.archived) return false;
+  if (s.folder && !(n.folders || []).includes(s.folder)) return false;
+  if (s.label && !(n.labels || []).includes(s.label)) return false;
+  if (s.color && (n.color || 'default') !== s.color) return false;
+  if (s.checks === 'with' && !n.checks?.total) return false;
+  if (s.checks === 'pending' && !(n.checks?.total > n.checks?.done)) return false;
+  if (s.checks === 'done' && !(n.checks?.total && n.checks.total === n.checks.done)) return false;
+  if (s.days && (n.updated || 0) < Date.now() - s.days * 86400000) return false;
+  const q = normalize(s.q).trim();
+  if (!q) return true;
+  const hay = normalize(`${n.title || ''} ${n.text || n.preview || ''}`);
+  return q.split(/\s+/).every((w) => hay.includes(w));
+}
+
+function openSearch() {
+  state.search.active = true;
+  clearSelection();
+  $('#appbar-list').hidden = true;
+  $('#appbar-search').hidden = false;
+  $('#search-filters').hidden = false;
+  renderSearchFilters();
+  renderList();
+  setTimeout(() => $('#search-input').focus(), 30);
+}
+
+function closeSearch() {
+  Object.assign(state.search, { active: false, q: '', folder: null, label: null, color: null, checks: null, days: null, archived: false });
+  $('#search-input').value = '';
+  $('#btn-search-clear').hidden = true;
+  $('#appbar-search').hidden = true;
+  $('#search-filters').hidden = true;
+  $('#appbar-list').hidden = state.selection.size > 0;
+  renderList();
+}
+
+let searchTimer;
+$('#btn-search').addEventListener('click', openSearch);
+$('#btn-search-close').addEventListener('click', closeSearch);
+$('#search-input').addEventListener('input', () => {
+  state.search.q = $('#search-input').value;
+  $('#btn-search-clear').hidden = !state.search.q;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(renderList, 120);
+});
+$('#search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#search-input').blur(); });
+$('#btn-search-clear').addEventListener('click', () => {
+  $('#search-input').value = ''; state.search.q = ''; $('#btn-search-clear').hidden = true; renderList(); $('#search-input').focus();
+});
+
+function renderSearchFilters() {
+  const s = state.search;
+  const colorName = (k) => COLORS.find(([key]) => key === k)?.[1] || k;
+  const checksName = { with: 'Con casillas', pending: 'Casillas pendientes', done: 'Casillas completas' };
+  const daysName = { 1: 'Hoy', 7: 'Últimos 7 días', 30: 'Últimos 30 días', 365: 'Último año' };
+  const chip = (key, label, value) => `<button class="chip filter-chip ripple${value ? ' on' : ''}" data-filter="${key}"><span>${esc(value || label)}</span>${icon('dropdown')}</button>`;
+  $('#search-filters').innerHTML = [
+    chip('folder', 'Carpeta', s.folder && folderPath(s.folder)),
+    chip('label', 'Etiqueta', s.label && labelById(s.label)?.name),
+    chip('color', 'Color', s.color && colorName(s.color)),
+    chip('checks', 'Casillas', s.checks && checksName[s.checks]),
+    chip('days', 'Fecha', s.days && daysName[s.days]),
+    `<button class="chip filter-chip ripple${s.archived ? ' on' : ''}" data-filter="archived">${s.archived ? icon('check') : ''}<span>Incluir archivadas</span></button>`,
+  ].join('');
+  $('#search-filters').querySelectorAll('[data-filter]').forEach((b) => b.addEventListener('click', (e) => openFilterMenu(b.dataset.filter, e.currentTarget)));
+}
+
+function openFilterMenu(key, anchor) {
+  const s = state.search;
+  const set = (v) => { s[key] = v; renderSearchFilters(); renderList(); };
+  if (key === 'archived') { set(!s.archived); return; }
+  const any = { label: 'Cualquiera', checked: !s[key], onClick: () => set(null) };
+  let items = [];
+  if (key === 'folder') items = folderTree().map((fo) => ({ label: `${'\u00A0\u00A0\u00A0'.repeat(fo.depth)}${esc(fo.name)}`, checked: s.folder === fo.id, onClick: () => set(fo.id) }));
+  if (key === 'label') items = [...state.org.labels].sort(byName).map((l) => ({ label: esc(l.name), checked: s.label === l.id, onClick: () => set(l.id) }));
+  if (key === 'color') items = COLORS.map(([k, label]) => ({ label, checked: s.color === k, onClick: () => set(k) }));
+  if (key === 'checks') items = [['with', 'Con casillas'], ['pending', 'Con casillas pendientes'], ['done', 'Con todas tildadas']].map(([v, label]) => ({ label, checked: s.checks === v, onClick: () => set(v) }));
+  if (key === 'days') items = [[1, 'Hoy'], [7, 'Últimos 7 días'], [30, 'Últimos 30 días'], [365, 'Último año']].map(([v, label]) => ({ label: `Editadas: ${label.toLowerCase()}`, checked: s.days === v, onClick: () => set(v) }));
+  if (!items.length) items = [{ label: key === 'folder' ? 'No hay carpetas' : 'No hay etiquetas', disabled: true }];
+  openMenu(anchor, [any, { divider: true }, ...items]);
+}
+
+/* ---------- Orden y vista ---------- */
+function showSortSheet() {
+  const cur = state.org.settings.sort || 'updated';
+  openSheet(`<h2 class="sheet-title">Ordenar por</h2>
+    <p class="sheet-text">Se aplica a todas tus listas. En el orden manual, arrastrá cada nota desde su manija.</p>
+    <div class="picker-list">${SORTS.map(([k, label]) => `<button class="picker-item ripple" data-sort="${k}"><span class="radio${k === cur ? ' on' : ''}"></span><span>${label}</span></button>`).join('')}</div>`, (body) => {
+    body.querySelectorAll('[data-sort]').forEach((b) => b.addEventListener('click', () => {
+      state.repo.saveSettings({ sort: b.dataset.sort });
+      state.org.settings.sort = b.dataset.sort; // reflejo inmediato
+      closeOverlays();
+      renderList();
+    }));
+  });
+}
+
+$('#btn-layout').addEventListener('click', () => {
+  state.layout = state.layout === 'list' ? 'grid' : 'list';
+  localStorage.setItem('notas-layout', state.layout);
+  renderList();
+});
+
+let lastCols = 0;
+window.addEventListener('resize', () => {
+  const c = columnCount();
+  if (c !== lastCols) { lastCols = c; if (state.view === 'list') renderList(); }
+});
+
+/* ---------- Orden manual: arrastrar desde la manija ---------- */
+function attachDrag(handle, el, n) {
+  handle.addEventListener('click', (e) => e.stopPropagation());
+  handle.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const grid = el.closest('.grid');
+    const ids = (grid.dataset.ids || '').split(',').filter(Boolean);
+    const rect = el.getBoundingClientRect();
+    const ghost = el.cloneNode(true);
+    ghost.classList.add('drag-ghost');
+    Object.assign(ghost.style, { width: `${rect.width}px`, left: `${rect.left}px`, top: `${rect.top}px` });
+    document.body.appendChild(ghost);
+    el.classList.add('drag-source');
+    haptic();
+    const ox = e.clientX - rect.left; const oy = e.clientY - rect.top;
+    const scroller = $('#list-scroll');
+    let target = null; let before = true; let autoScroll = 0;
+    const tick = () => { if (autoScroll) { scroller.scrollTop += autoScroll; requestAnimationFrame(tick); } };
+    const clearMarks = () => document.querySelectorAll('.drop-before, .drop-after').forEach((c) => c.classList.remove('drop-before', 'drop-after'));
+    const move = (ev) => {
+      ghost.style.left = `${ev.clientX - ox}px`;
+      ghost.style.top = `${ev.clientY - oy}px`;
+      clearMarks();
+      const under = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.card');
+      if (under && under !== el && under.closest('.grid') === grid) {
+        const r = under.getBoundingClientRect();
+        before = ev.clientY < r.top + r.height / 2;
+        target = under.dataset.id;
+        under.classList.add(before ? 'drop-before' : 'drop-after');
+      } else target = null;
+      const sr = scroller.getBoundingClientRect();
+      const was = autoScroll;
+      autoScroll = ev.clientY < sr.top + 60 ? -8 : ev.clientY > sr.bottom - 60 ? 8 : 0;
+      if (autoScroll && !was) requestAnimationFrame(tick);
+    };
+    const end = (ok) => {
+      autoScroll = 0;
+      handle.removeEventListener('pointermove', move);
+      ghost.remove();
+      el.classList.remove('drag-source');
+      clearMarks();
+      if (ok && target) reorder(n.id, target, before, ids);
+    };
+    handle.setPointerCapture(e.pointerId);
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', () => end(true), { once: true });
+    handle.addEventListener('pointercancel', () => end(false), { once: true });
+  });
+}
+
+function reorder(id, targetId, before, ids) {
+  const arr = ids.filter((x) => x !== id);
+  let i = arr.indexOf(targetId);
+  if (i < 0) return;
+  if (!before) i++;
+  arr.splice(i, 0, id);
+  arr.forEach((x, k) => {
+    const n = noteById(x);
+    const order = (k + 1) * 1000;
+    if (n && n.order !== order) { n.order = order; state.repo.setMeta(x, { order }); }
+  });
+  haptic();
+  renderList();
+}
+
+/* ---------- Plantillas ---------- */
+async function useTemplate(id) {
+  const f = state.filter;
+  const meta = f.kind === 'folder' ? { folders: [f.id] } : f.kind === 'label' ? { labels: [f.id] } : {};
+  const created = await copyNotes([id], { fromTemplate: true, meta, quiet: true });
+  if (!created?.length) return;
+  if (f.kind === 'templates' || f.kind === 'archive' || f.kind === 'trash') state.filter = { kind: 'notes' };
+  renderList();
+  setTimeout(() => openNote(created[0].id, { meta: { ...meta, template: false } }), 300);
+}
+
+function pickTemplate() {
+  const templates = sortNotes(state.notes.filter((n) => n.template && !n.trashed));
+  if (!templates.length) {
+    snackbar('Todavía no hay plantillas', 'Ver plantillas', () => setFilter({ kind: 'templates' }));
+    return;
+  }
+  openSheet(`<h2 class="sheet-title">Nueva nota desde plantilla</h2>
+    <div class="picker-list">${templates.map((t) => `<button class="picker-item ripple" data-tpl="${esc(t.id)}">${icon('template')}<span>${esc(t.title || t.preview?.slice(0, 60) || 'Plantilla sin título')}</span></button>`).join('')}</div>
+    <div class="sheet-actions"><span class="spacer"></span><button class="text-btn ripple" id="tpl-manage">Administrar plantillas</button></div>`, (body) => {
+    body.querySelectorAll('[data-tpl]').forEach((b) => b.addEventListener('click', () => { closeOverlays(); useTemplate(b.dataset.tpl); }));
+    body.querySelector('#tpl-manage').addEventListener('click', () => setFilter({ kind: 'templates' }));
+  });
+}
+
+// Mantener presionado el botón + : nota desde plantilla
+(() => {
+  let t; let long = false;
+  const fab = $('#fab');
+  fab.addEventListener('pointerdown', () => { long = false; t = setTimeout(() => { long = true; haptic(); pickTemplate(); }, 500); });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => fab.addEventListener(ev, () => clearTimeout(t)));
+  fab.addEventListener('click', (e) => { if (long) { e.stopImmediatePropagation(); long = false; } }, true);
+  fab.addEventListener('contextmenu', (e) => e.preventDefault());
+})();
+
 /* ---------- Inicio ---------- */
 function init() {
   hydrateIcons();
@@ -1282,7 +1574,7 @@ function init() {
     if (!state.repo) return;
     haptic();
     const f = state.filter;
-    const meta = f.kind === 'folder' ? { folders: [f.id] } : f.kind === 'label' ? { labels: [f.id] } : {};
+    const meta = f.kind === 'folder' ? { folders: [f.id] } : f.kind === 'label' ? { labels: [f.id] } : f.kind === 'templates' ? { template: true } : {};
     const id = state.repo.create();
     if (Object.keys(meta).length) state.repo.setMeta(id, meta);
     // Mostrar el editor y enfocar el título dentro del mismo toque: así el teclado se abre en el celular.

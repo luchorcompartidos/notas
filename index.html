@@ -32,9 +32,17 @@
         <h1 class="appbar-title" id="list-title">Notas</h1>
         <button class="version-chip ripple" id="btn-version" aria-label="Versión y cambios">v__APP_VERSION__</button>
         <span class="spacer"></span>
+        <button class="icon-btn ripple" id="btn-search" aria-label="Buscar" data-icon="search"></button>
+        <button class="icon-btn ripple" id="btn-layout" aria-label="Cambiar vista" data-icon="viewList"></button>
         <button class="icon-btn ripple" id="btn-sync" aria-label="Cuenta y sincronización" data-icon="phone"></button>
         <button class="icon-btn ripple" id="btn-menu-list" aria-label="Más opciones" data-icon="more"></button>
       </header>
+      <header class="appbar search-bar" id="appbar-search" hidden>
+        <button class="icon-btn ripple" id="btn-search-close" aria-label="Cerrar búsqueda" data-icon="back"></button>
+        <input class="search-input" id="search-input" type="search" placeholder="Buscar en tus notas" autocomplete="off" enterkeyhint="search">
+        <button class="icon-btn ripple" id="btn-search-clear" aria-label="Borrar búsqueda" data-icon="close" hidden></button>
+      </header>
+      <div class="chips-row search-filters" id="search-filters" hidden></div>
       <header class="appbar select-bar" id="appbar-select" hidden>
         <button class="icon-btn ripple" id="btn-select-close" aria-label="Cancelar selección" data-icon="close"></button>
         <h1 class="appbar-title" id="select-count">0</h1>
