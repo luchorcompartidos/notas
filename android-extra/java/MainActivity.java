@@ -1,0 +1,13 @@
+package io.github.luchorcompartidos.notas;
+
+import android.os.Bundle;
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        // Plugin propio: recibe "Compartir con…" y las acciones del widget y de los accesos directos
+        registerPlugin(IntentBridgePlugin.class);
+        super.onCreate(savedInstanceState);
+    }
+}

@@ -126,6 +126,8 @@ jobs:
           MANIFEST=android/app/src/main/AndroidManifest.xml
           grep -q windowSoftInputMode "$MANIFEST" || sed -i 's/android:launchMode="singleTask"/android:launchMode="singleTask" android:windowSoftInputMode="adjustResize"/' "$MANIFEST"
           grep -n "versionCode\|versionName" android/app/build.gradle
+      - name: Ícono, widget, accesos directos y "Compartir con…"
+        run: python3 android-extra/patch-android.py
       - name: Firebase e inicio de sesión con Google
         run: |
           cp config/google-services.json android/app/google-services.json

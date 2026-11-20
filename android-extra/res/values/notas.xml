@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <color name="notas_icon_bg">#6750A4</color>
+  <string name="widget_nueva_nota">Nueva nota</string>
+  <string name="widget_descripcion">Crear una nota o una lista con casillas</string>
+  <string name="atajo_nota">Nueva nota</string>
+  <string name="atajo_lista">Nueva lista</string>
+  <string name="atajo_buscar">Buscar</string>
+</resources>

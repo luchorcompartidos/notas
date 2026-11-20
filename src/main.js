@@ -3,13 +3,14 @@ import { hydrateIcons, icon } from './icons.js';
 import { requestPersistence } from './store.js';
 import {
   createEditor, runCommand, isActive, summarize, compressImage, makeThumb,
-  refreshReminderMarks, currentTaskItem, taskItems, checkTaskItem,
+  refreshReminderMarks, currentTaskItem, taskItems, checkTaskItem, compressDataUrl, noteLinks,
 } from './editor.js';
+import { getPreview, domainOf, previewsEnabled, setPreviewsEnabled } from './links.js';
 import {
   REPEATS, SNOOZE_MIN, nextOccurrence, formatWhen, initNativeReminders, ensureNativePermissions,
   syncNative, syncWeb, askWebNotifications, showWebNotification,
 } from './reminders.js';
-import { initNative, setStatusBar, haptic, minimizeApp, isNative } from './native.js';
+import { initNative, setStatusBar, haptic, minimizeApp, isNative, listenIntents } from './native.js';
 import { APP_VERSION, CHANGELOG_URL, getLatestRelease, isNewer, formatDate } from './version.js';
 import { applyTextDiff } from './sync.js';
 import { CloudRepo, LocalRepo, orgId } from './repo.js';
@@ -303,6 +304,7 @@ function onList(list) {
   maybePurge();
   scheduleReminders();
   if (pendingOpenNote && list.some((n) => n.id === pendingOpenNote)) { const id = pendingOpenNote; pendingOpenNote = null; openNote(id); }
+  if (pendingIntents.length && state.repo?.serverLoaded) setTimeout(flushIntents, 50);
 }
 
 function onOrg(org) {
@@ -600,7 +602,7 @@ async function openNote(id, { push = true, isNew = false, meta = {} } = {}) {
 
   editor = createEditor($('#editor'), {
     ydoc: session.ydoc,
-    onUpdate: (ed, remote) => { if (!remote) { markDirty(); checkCasillaReminders(); } },
+    onUpdate: (ed, remote) => { if (!remote) { markDirty(); checkCasillaReminders(); } scheduleLinkPreviews(); },
     reminderIds: reminderItemIds,
     onState: (ed) => updateToolbar(ed),
     onCreate: (ed) => {
@@ -612,6 +614,8 @@ async function openNote(id, { push = true, isNew = false, meta = {} } = {}) {
     },
   });
   if (c.trashed || myRole(noteById(c.id)) === 'view') editor.setEditable(false);
+  $('#link-previews').dataset.urls = '';
+  scheduleLinkPreviews(400);
   updateToolbar(editor);
 }
 
@@ -629,6 +633,9 @@ async function closeSession() {
     editor = null;
   }
   $('#editor').innerHTML = '';
+  $('#link-previews').innerHTML = '';
+  $('#link-previews').dataset.urls = '';
+  clearTimeout(linkTimer);
   if (c.titleObserver) c.session?.titleText.unobserve(c.titleObserver);
   c.session?.destroy();
   state.current = null;
@@ -817,6 +824,7 @@ $('#btn-menu-list').addEventListener('click', (e) => {
     ...ctx,
     { label: 'Ordenar por…', onClick: showSortSheet },
     { label: 'Nueva nota desde plantilla…', onClick: pickTemplate },
+    { label: 'Vista previa de links', checked: previewsEnabled(), onClick: () => { setPreviewsEnabled(!previewsEnabled()); snackbar(previewsEnabled() ? 'Vista previa de links activada' : 'Vista previa de links desactivada'); } },
     { divider: true },
     { label: 'Tema del sistema', checked: pref === 'system', onClick: () => setTheme('system') },
     { label: 'Tema claro', checked: pref === 'light', onClick: () => setTheme('light') },
@@ -830,7 +838,7 @@ function showVersion() {
   const r = state.release;
   openSheet(`
     <h2 class="sheet-title">Notas v${esc(APP_VERSION)}</h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 3: compartir</p>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 4: integración y sin conexión</p>
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);
@@ -2011,6 +2019,98 @@ function openShareSheet(noteId) {
   });
 }
 
+/* ---------- Fase 4: "Compartir con…", widget, accesos directos y vista previa de links ---------- */
+const LIST_HTML = '<ul data-type="taskList"><li data-type="taskItem" data-checked="false"><p></p></li></ul>';
+const pendingIntents = [];
+
+function onIntent(data) {
+  if (!state.repo || !state.repo.serverLoaded) { pendingIntents.push(data); return; }
+  runIntent(data);
+}
+
+function flushIntents() {
+  while (pendingIntents.length && state.repo?.serverLoaded) runIntent(pendingIntents.shift());
+}
+
+async function runIntent(data) {
+  closeOverlays();
+  clearSelection();
+  if (state.view === 'editor') {
+    history.replaceState(null, '', location.pathname + location.search);
+    state.pushed = false;
+    await closeEditor();
+  }
+  if (data.kind === 'search') { setFilter({ kind: 'notes' }); openSearch(); return; }
+  if (data.kind === 'note' || data.kind === 'list') {
+    const legacy = data.kind === 'list' ? LIST_HTML : null;
+    const id = state.repo.create(legacy ? { legacy } : {});
+    openNote(id, { isNew: true, meta: legacy ? { legacy } : {} });
+    return;
+  }
+  if (data.kind === 'share') await noteFromShare(data);
+}
+
+const linkify = (line) => esc(line).replace(/https?:\/\/[^\s<>"']+/gi, (u) => `<a href="${u}">${u}</a>`);
+
+async function noteFromShare(data) {
+  const text = String(data.text || '').trim();
+  const subject = String(data.subject || '').trim();
+  const parts = text ? text.split(/\r?\n/).map((l) => `<p>${linkify(l)}</p>`) : [];
+  let skipped = 0;
+  for (const img of (data.images || []).slice(0, 6)) {
+    try {
+      const url = await compressDataUrl(img);
+      if (parts.join('').length + url.length > 850000) { skipped++; continue; }
+      parts.push(`<img src="${url}">`);
+    } catch { skipped++; }
+  }
+  if (!parts.length) { snackbar('No llegó contenido para crear la nota'); return; }
+  const legacy = parts.join('');
+  const title = subject && subject !== text ? subject.slice(0, 200) : '';
+  const id = state.repo.create({ title, preview: text.slice(0, 500), text: text.slice(0, 20000), legacy });
+  openNote(id, { isNew: true, meta: { legacy, seedTitle: title } });
+  snackbar(skipped ? `Nota creada. ${skipped} imagen${skipped > 1 ? 'es' : ''} no entraron (muy pesadas).` : 'Nota creada desde «Compartir»');
+}
+
+// Vista previa de los links de la nota (debajo del texto)
+let linkTimer;
+function scheduleLinkPreviews(delay = 1200) {
+  clearTimeout(linkTimer);
+  linkTimer = setTimeout(renderLinkPreviews, delay);
+}
+
+async function renderLinkPreviews() {
+  const box = $('#link-previews');
+  if (!editor || !state.current || !previewsEnabled()) { box.innerHTML = ''; return; }
+  const urls = noteLinks(editor);
+  const noteId = state.current.id;
+  if (box.dataset.urls === urls.join(' ')) return;
+  box.dataset.urls = urls.join(' ');
+  box.innerHTML = urls.map((u) => `
+    <a class="link-card ripple" href="${esc(u)}" data-url="${esc(u)}">
+      <span class="link-img">${icon('link')}</span>
+      <span class="link-body"><strong>${esc(domainOf(u))}</strong><small>${esc(u)}</small></span>
+    </a>`).join('');
+  box.querySelectorAll('.link-card').forEach((a) => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.open(a.dataset.url, '_blank', 'noopener');
+  }));
+  urls.forEach((u) => getPreview(u).then((p) => {
+    if (state.current?.id !== noteId) return;
+    const card = [...box.querySelectorAll('.link-card')].find((a) => a.dataset.url === u);
+    if (!card || (!p.title && !p.image)) return;
+    card.querySelector('.link-body').innerHTML = `<strong>${esc(p.title || domainOf(u))}</strong><small>${esc(p.site || domainOf(u))}${p.description ? ` · ${esc(p.description)}` : ''}</small>`;
+    if (p.image) {
+      const img = document.createElement('img');
+      img.src = p.image; img.alt = ''; img.loading = 'lazy';
+      img.onerror = () => img.remove();
+      const holder = card.querySelector('.link-img');
+      holder.innerHTML = '';
+      holder.appendChild(img);
+    }
+  }));
+}
+
 /* ---------- Inicio ---------- */
 function init() {
   hydrateIcons();
@@ -2019,6 +2119,11 @@ function init() {
   bindEditorUi();
   initNative({ onBack: goBack });
   initNativeReminders(handleReminderAction);
+  listenIntents(onIntent);
+  // Web: funciona sin conexión (service worker) e instalable como app
+  if (!isNative && 'serviceWorker' in navigator && location.protocol === 'https:') {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
 
   $('#fab').addEventListener('click', () => {
     if (!state.repo) return;

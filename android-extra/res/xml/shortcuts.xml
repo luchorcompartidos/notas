@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+  <shortcut android:shortcutId="nueva_nota" android:enabled="true" android:icon="@drawable/ic_widget_add"
+      android:shortcutShortLabel="@string/atajo_nota">
+    <intent android:action="io.github.luchorcompartidos.notas.NUEVA_NOTA"
+        android:targetPackage="io.github.luchorcompartidos.notas" android:targetClass="io.github.luchorcompartidos.notas.MainActivity"/>
+  </shortcut>
+  <shortcut android:shortcutId="nueva_lista" android:enabled="true" android:icon="@drawable/ic_widget_list"
+      android:shortcutShortLabel="@string/atajo_lista">
+    <intent android:action="io.github.luchorcompartidos.notas.NUEVA_LISTA"
+        android:targetPackage="io.github.luchorcompartidos.notas" android:targetClass="io.github.luchorcompartidos.notas.MainActivity"/>
+  </shortcut>
+  <shortcut android:shortcutId="buscar" android:enabled="true" android:icon="@drawable/ic_widget_search"
+      android:shortcutShortLabel="@string/atajo_buscar">
+    <intent android:action="io.github.luchorcompartidos.notas.BUSCAR"
+        android:targetPackage="io.github.luchorcompartidos.notas" android:targetClass="io.github.luchorcompartidos.notas.MainActivity"/>
+  </shortcut>
+</shortcuts>

@@ -6,6 +6,7 @@ import TaskItem from '@tiptap/extension-task-item';
 import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import Collaboration from '@tiptap/extension-collaboration';
+import Link from '@tiptap/extension-link';
 import { ySyncPluginKey } from 'y-prosemirror';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -108,6 +109,7 @@ export function createEditor(element, { ydoc, onUpdate, onState, onCreate, remin
       TaskItemConId.configure({ nested: true, reminderIds }),
       Image.configure({ inline: false, allowBase64: true }),
       Placeholder.configure({ placeholder: 'Escribí tu nota…' }),
+      Link.configure({ autolink: true, linkOnPaste: true, openOnClick: false, HTMLAttributes: { rel: 'noopener noreferrer nofollow', target: '_blank' } }),
       Collaboration.configure({ document: ydoc, field: 'default' }),
     ],
     editorProps: {
@@ -197,4 +199,31 @@ export async function makeThumb(src, max = 320, quality = 0.6) {
     thumbCache.set(key, url);
     return url;
   } catch { return null; }
+}
+
+// Reduce una imagen que llega como data URL (por ejemplo, desde "Compartir con…")
+export async function compressDataUrl(dataUrl, max = 1280, quality = 0.8) {
+  const img = new window.Image();
+  img.src = dataUrl;
+  await img.decode();
+  const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.naturalWidth * scale);
+  c.height = Math.round(img.naturalHeight * scale);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  let url = c.toDataURL('image/webp', quality);
+  if (!url.startsWith('data:image/webp')) url = c.toDataURL('image/jpeg', quality);
+  return url;
+}
+
+// Links de la nota (marcados como link o escritos como texto)
+export function noteLinks(editor, limit = 5) {
+  const found = [];
+  const add = (u) => { if (u && /^https?:\/\//i.test(u) && !found.includes(u) && found.length < limit) found.push(u); };
+  editor.state.doc.descendants((node) => {
+    if (!node.isText) return;
+    node.marks.forEach((m) => { if (m.type.name === 'link') add(m.attrs.href); });
+    (node.text.match(/https?:\/\/[^\s<>"']+/gi) || []).forEach((u) => add(u.replace(/[.,;:!?)]+$/, '')));
+  });
+  return found;
 }

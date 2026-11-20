@@ -17,6 +17,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | 1B | v0.0.8 | Búsqueda con filtros, orden por criterios y manual (arrastrar), vista lista/cuadrícula, plantillas |
 | 2 | v0.0.9 | Recordatorios por nota y por casilla, con repetición; notificaciones en Android con «Hecho» y «Posponer» |
 | 3 | v0.0.10 | Compartir por email (puede editar / solo puede ver), «Compartidas conmigo», edición simultánea, quitar acceso, salir de una nota |
+| 4 | v0.0.11 | «Compartir con…» desde otras apps, widget de nota rápida, ícono propio, accesos directos, web instalable que abre sin conexión, vista previa de links |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
 
@@ -44,6 +45,9 @@ Todo lo hace `.github/workflows/ci.yml` en cada push a `main`:
 También se puede lanzar a mano: *Actions → CI → Run workflow* y elegir el tipo de Release.
 
 ## Notas técnicas
+
+- `android-extra/`: ícono, splash, widget, accesos directos y el plugin nativo `IntentBridge` ("Compartir con…"); `patch-android.py` los aplica al proyecto que genera Capacitor en cada compilación.
+- Vista previa de links: en el APK se descarga la página desde el teléfono; en la web se usa el servicio gratuito microlink.io (se puede desactivar desde el menú ⋮).
 
 - El APK se firma con la clave fija guardada en los Secrets del repo (`ANDROID_KEYSTORE_BASE64`,
   `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`). Su SHA-1 está registrada en Firebase.
