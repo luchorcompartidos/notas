@@ -127,6 +127,9 @@ export class NoteSession {
     try { await batch.commit(); } catch (e) { console.warn('No se pudo compactar', e); }
   }
 
+  // Estado completo de la nota (para el historial de versiones)
+  snapshot() { return Y.encodeStateAsUpdate(this.ydoc); }
+
   emit() {
     this.onStatus({ pending: this.pending + (this.queue.length ? 1 : 0), error: this.error });
   }

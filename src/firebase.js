@@ -2,7 +2,7 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth, initializeAuth, indexedDBLocalPersistence, GoogleAuthProvider,
-  signInWithPopup, signInWithCredential, signOut, onAuthStateChanged,
+  signInWithPopup, signInWithCredential, signOut, onAuthStateChanged, reauthenticateWithPopup,
 } from 'firebase/auth';
 import { Capacitor } from '@capacitor/core';
 import {
@@ -95,4 +95,11 @@ export function errorDetail(e) {
   if (e?.message) parts.push(`Mensaje: ${e.message}`);
   if (e?.data) { try { parts.push(`Datos: ${JSON.stringify(e.data)}`); } catch { /* nada */ } }
   return parts.join('\n') || String(e);
+}
+
+// Confirmar identidad con Google (respaldo para abrir notas bloqueadas en la web sin huella)
+export async function reauthGoogle() {
+  const user = fb().auth.currentUser;
+  if (!user) return false;
+  try { await reauthenticateWithPopup(user, new GoogleAuthProvider()); return true; } catch { return false; }
 }

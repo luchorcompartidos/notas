@@ -3,8 +3,14 @@ import { hydrateIcons, icon } from './icons.js';
 import { requestPersistence } from './store.js';
 import {
   createEditor, runCommand, isActive, summarize, compressImage, makeThumb,
-  refreshReminderMarks, currentTaskItem, taskItems, checkTaskItem, compressDataUrl, noteLinks,
+  refreshReminderMarks, currentTaskItem, taskItems, checkTaskItem, compressDataUrl, noteLinks, contentExtensions,
 } from './editor.js';
+import * as Y from 'yjs';
+import { generateHTML, generateJSON } from '@tiptap/core';
+import {
+  toText, toMarkdown, toDocx, toPdf, toBackup, deliverFile, safeName, readImport, resolveImages,
+} from './transfer.js';
+import { verifyUser } from './lock.js';
 import { getPreview, domainOf, previewsEnabled, setPreviewsEnabled } from './links.js';
 import {
   REPEATS, SNOOZE_MIN, nextOccurrence, formatWhen, initNativeReminders, ensureNativePermissions,
@@ -15,7 +21,7 @@ import { APP_VERSION, CHANGELOG_URL, getLatestRelease, isNewer, formatDate } fro
 import { applyTextDiff } from './sync.js';
 import { CloudRepo, LocalRepo, orgId } from './repo.js';
 import { yXmlFragmentToProsemirrorJSON } from 'y-prosemirror';
-import { fb, watchAuth, signInGoogle, signOutUser, authErrorMessage, errorDetail } from './firebase.js';
+import { fb, watchAuth, signInGoogle, signOutUser, authErrorMessage, errorDetail, reauthGoogle } from './firebase.js';
 
 const $ = (s) => document.querySelector(s);
 const root = document.documentElement;
@@ -38,6 +44,7 @@ const state = {
   layout: localStorage.getItem('notas-layout') || 'grid',
   reminders: [],
   invites: [],
+  unlocked: new Set(),
 };
 
 const SORTS = [['updated', 'Fecha de modificación'], ['created', 'Fecha de creación'], ['title', 'Título (A-Z)'], ['manual', 'Manual (arrastrar)']];
@@ -47,6 +54,7 @@ const TRASH_OPTIONS = [[7, '7 días'], [15, '15 días'], [30, '30 días'], [60, 
 let editor = null;
 let summaryTimer;
 let openToken = 0;
+let lockTimer;
 
 /* ---------- Tema (sistema / claro / oscuro) ---------- */
 const mq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -425,18 +433,24 @@ function cardEl(n) {
   check.addEventListener('click', (e) => { e.stopPropagation(); toggleSelect(n.id); });
   el.appendChild(check);
 
-  if (n.thumb) {
+  const hidden = n.locked && !state.unlocked.has(n.id);
+  if (hidden) {
+    el.classList.add('locked');
+    const t = document.createElement('h3'); t.className = 'card-title'; t.textContent = n.title || 'Nota bloqueada'; el.appendChild(t);
+    const p = document.createElement('p'); p.className = 'card-meta'; p.innerHTML = `${icon('lock')}<span>Bloqueada</span>`; el.appendChild(p);
+  }
+  if (n.thumb && !hidden) {
     const img = document.createElement('img');
     img.className = 'card-img'; img.src = n.thumb; img.alt = ''; img.loading = 'lazy';
     el.appendChild(img);
   }
-  if (n.title) {
+  if (n.title && !hidden) {
     const t = document.createElement('h3'); t.className = 'card-title'; t.textContent = n.title; el.appendChild(t);
   }
-  if (n.preview) {
+  if (n.preview && !hidden) {
     const p = document.createElement('p'); p.className = 'card-text'; p.textContent = n.preview; el.appendChild(p);
   }
-  if (n.checks?.total) {
+  if (n.checks?.total && !hidden) {
     const m = document.createElement('p'); m.className = 'card-meta';
     m.innerHTML = `${icon('checklist')}<span>${n.checks.done}/${n.checks.total}</span>`;
     el.appendChild(m);
@@ -559,6 +573,10 @@ function paintEditorChrome() {
 async function openNote(id, { push = true, isNew = false, meta = {} } = {}) {
   const n = state.notes.find((x) => x.id === id);
   if (!n && !isNew) return;
+  if (n?.locked && !state.unlocked.has(id) && !(await unlockNote(n))) {
+    if (!push && location.hash) history.replaceState(null, '', location.pathname + location.search);
+    return;
+  }
   await closeSession();
   const token = ++openToken;
   const c = {
@@ -604,6 +622,7 @@ async function openNote(id, { push = true, isNew = false, meta = {} } = {}) {
     ydoc: session.ydoc,
     onUpdate: (ed, remote) => { if (!remote) { markDirty(); checkCasillaReminders(); } scheduleLinkPreviews(); },
     reminderIds: reminderItemIds,
+    resolveImage,
     onState: (ed) => updateToolbar(ed),
     onCreate: (ed) => {
       if (needsSeed && c.legacy) {
@@ -616,6 +635,7 @@ async function openNote(id, { push = true, isNew = false, meta = {} } = {}) {
   if (c.trashed || myRole(noteById(c.id)) === 'view') editor.setEditable(false);
   $('#link-previews').dataset.urls = '';
   scheduleLinkPreviews(400);
+  setTimeout(() => migrateInlineImages(id), 1500);
   updateToolbar(editor);
 }
 
@@ -637,6 +657,7 @@ async function closeSession() {
   $('#link-previews').dataset.urls = '';
   clearTimeout(linkTimer);
   if (c.titleObserver) c.session?.titleText.unobserve(c.titleObserver);
+  if (c.session && !(empty && c.isNew)) maybeSaveVersion(c, c.session);
   c.session?.destroy();
   state.current = null;
   if (empty && c.isNew) state.repo.removeCompletely(c.id);
@@ -674,6 +695,7 @@ function markDirty() {
   const c = state.current;
   if (!c) return;
   c.dirty = true;
+  c.versionDirty = true;
   clearTimeout(summaryTimer);
   summaryTimer = setTimeout(saveSummaryNow, 1200);
 }
@@ -685,7 +707,8 @@ async function saveSummaryNow() {
   if (!c || !c.dirty || !editor) return;
   c.dirty = false;
   const s = summarize(editor.getJSON(), editor.getText({ blockSeparator: '\n' }));
-  const thumb = await makeThumb(s.thumb);
+  const thumbSrc = s.thumb?.startsWith('img:') ? await resolveImage(s.thumb) : s.thumb;
+  const thumb = await makeThumb(thumbSrc);
   const patch = {
     title: $('#note-title').value, preview: s.preview, text: s.text, checks: s.checks, thumb, updated: Date.now(),
   };
@@ -721,7 +744,8 @@ function bindEditorUi() {
     if (!file || !editor) return;
     try {
       const { url, kb } = await compressImage(file);
-      editor.chain().focus().setImage({ src: url }).createParagraphNear().run();
+      const src = await storeImage(state.current.id, url);
+      editor.chain().focus().setImage({ src }).createParagraphNear().run();
       snackbar(`Imagen agregada (${kb} KB)`);
     } catch {
       snackbar('No se pudo cargar la imagen');
@@ -776,6 +800,9 @@ function bindEditorUi() {
       ...(noteFolders(c).length ? [{ label: 'Ver en qué carpetas está', onClick: () => showOccurrences(c.id) }] : []),
       { divider: true },
       { label: c.archived ? 'Desarchivar' : 'Archivar', onClick: () => { const id = c.id; const v = !c.archived; goBack(); archiveNotes([id], v); } },
+      { label: 'Historial de versiones', onClick: () => showVersions(c.id) },
+      { label: 'Exportar…', onClick: () => openExportSheet([c.id]) },
+      { label: (noteById(c.id)?.locked ? 'Quitar el bloqueo' : 'Bloquear con huella'), onClick: () => setLocked([c.id], !noteById(c.id)?.locked) },
       { label: 'Copiar nota', onClick: async () => { await saveSummaryNow(); copyNotes([c.id]); } },
       c.template
         ? { label: 'Usar esta plantilla', onClick: async () => { await saveSummaryNow(); const id = c.id; goBack(); setTimeout(() => useTemplate(id), 250); } }
@@ -824,6 +851,8 @@ $('#btn-menu-list').addEventListener('click', (e) => {
     ...ctx,
     { label: 'Ordenar por…', onClick: showSortSheet },
     { label: 'Nueva nota desde plantilla…', onClick: pickTemplate },
+    { label: 'Exportar todas las notas…', onClick: () => openExportSheet(state.notes.filter((n) => !n.trashed).map((n) => n.id)) },
+    { label: 'Importar notas…', onClick: pickImportFiles },
     { label: 'Vista previa de links', checked: previewsEnabled(), onClick: () => { setPreviewsEnabled(!previewsEnabled()); snackbar(previewsEnabled() ? 'Vista previa de links activada' : 'Vista previa de links desactivada'); } },
     { divider: true },
     { label: 'Tema del sistema', checked: pref === 'system', onClick: () => setTheme('system') },
@@ -838,7 +867,7 @@ function showVersion() {
   const r = state.release;
   openSheet(`
     <h2 class="sheet-title">Notas v${esc(APP_VERSION)}</h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 4: integración y sin conexión</p>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 5: robustez y datos</p>
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);
@@ -1381,6 +1410,8 @@ function renderSelectActions() {
       ...(f.kind === 'templates' && ids.length === 1 ? [{ label: 'Usar plantilla', onClick: () => { useTemplate(ids[0]); clearSelection(); } }] : []),
       ...(f.kind !== 'templates' ? [{ label: ids.length > 1 ? 'Guardar como plantillas' : 'Guardar como plantilla', onClick: () => { copyNotes(ids, { asTemplate: true }); clearSelection(); } }] : []),
       { label: ids.length > 1 ? `Copiar ${ids.length} notas` : 'Copiar nota', onClick: () => { copyNotes(ids); clearSelection(); } },
+      { label: 'Exportar…', onClick: () => { openExportSheet(ids); clearSelection(); } },
+      { label: notes.every((n) => n.locked) ? 'Quitar el bloqueo' : 'Bloquear con huella', onClick: () => { setLocked(ids, !notes.every((n) => n.locked)); clearSelection(); } },
       ...(f.kind === 'folder' ? [{ label: 'Quitar de esta carpeta', onClick: () => { removeFromFolder(ids, f.id); clearSelection(); } }] : []),
       selectAll,
     ];
@@ -1453,7 +1484,7 @@ function matchesSearch(n) {
   if (s.days && (n.updated || 0) < Date.now() - s.days * 86400000) return false;
   const q = normalize(s.q).trim();
   if (!q) return true;
-  const hay = normalize(`${n.title || ''} ${n.text || n.preview || ''}`);
+  const hay = normalize(n.locked && !state.unlocked.has(n.id) ? (n.title || '') : `${n.title || ''} ${n.text || n.preview || ''}`);
   return q.split(/\s+/).every((w) => hay.includes(w));
 }
 
@@ -1674,7 +1705,7 @@ function describeReminder(r) {
   const n = noteById(r.noteId);
   if (!n || n.trashed) return null;
   const title = n.title || (r.itemId ? 'Casilla pendiente' : 'Recordatorio');
-  const body = r.itemId ? `☐ ${r.itemText || 'Casilla'}` : (n.preview ? n.preview.slice(0, 160) : 'Tocá para abrir la nota');
+  const body = n.locked ? 'Nota bloqueada: tocá para abrirla' : r.itemId ? `☐ ${r.itemText || 'Casilla'}` : (n.preview ? n.preview.slice(0, 160) : 'Tocá para abrir la nota');
   return { title, body };
 }
 
@@ -2057,17 +2088,19 @@ async function noteFromShare(data) {
   const subject = String(data.subject || '').trim();
   const parts = text ? text.split(/\r?\n/).map((l) => `<p>${linkify(l)}</p>`) : [];
   let skipped = 0;
-  for (const img of (data.images || []).slice(0, 6)) {
+  const newId = state.repo.newNoteId();
+  for (const img of (data.images || []).slice(0, 20)) {
     try {
       const url = await compressDataUrl(img);
-      if (parts.join('').length + url.length > 850000) { skipped++; continue; }
-      parts.push(`<img src="${url}">`);
+      const src = await storeImage(newId, url);
+      if (src.startsWith('data:') && parts.join('').length + src.length > 850000 && state.mode === 'cloud') { skipped++; continue; }
+      parts.push(`<img src="${src}">`);
     } catch { skipped++; }
   }
   if (!parts.length) { snackbar('No llegó contenido para crear la nota'); return; }
   const legacy = parts.join('');
   const title = subject && subject !== text ? subject.slice(0, 200) : '';
-  const id = state.repo.create({ title, preview: text.slice(0, 500), text: text.slice(0, 20000), legacy });
+  const id = state.repo.create({ title, preview: text.slice(0, 500), text: text.slice(0, 20000), legacy }, newId);
   openNote(id, { isNew: true, meta: { legacy, seedTitle: title } });
   snackbar(skipped ? `Nota creada. ${skipped} imagen${skipped > 1 ? 'es' : ''} no entraron (muy pesadas).` : 'Nota creada desde «Compartir»');
 }
@@ -2111,6 +2144,325 @@ async function renderLinkPreviews() {
   }));
 }
 
+/* ---------- Fase 5: imágenes aparte, historial, exportar/importar y notas bloqueadas ---------- */
+const resolveImage = (key) => state.repo?.getImage(key) || Promise.resolve(null);
+
+// Guarda una imagen (ya comprimida) aparte de la nota y devuelve la referencia para el contenido
+async function storeImage(noteId, dataUrl) {
+  let url = dataUrl;
+  if (url.length > 900000) url = await compressDataUrl(url, 1024, 0.6); // límite de Firestore por documento
+  return state.repo.saveImage(noteId, url);
+}
+
+// Notas viejas con imágenes dentro del texto: se pasan a "guardadas aparte" (sin límite de tamaño)
+async function migrateInlineImages(noteId) {
+  if (state.mode !== 'cloud' || !editor || state.current?.id !== noteId) return;
+  if (myRole(noteById(noteId)) === 'view') return;
+  const srcs = new Set();
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === 'image' && node.attrs.src?.startsWith('data:') && node.attrs.src.length > 20000) srcs.add(node.attrs.src);
+  });
+  for (const src of srcs) {
+    const key = await storeImage(noteId, src);
+    if (!editor || state.current?.id !== noteId) return;
+    const tr = editor.state.tr; let changed = false;
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'image' && node.attrs.src === src) { tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: key }); changed = true; }
+    });
+    if (changed) editor.view.dispatch(tr);
+  }
+}
+
+/* --- Historial de versiones --- */
+const VERSION_EVERY = 10 * 60000; // como mucho una versión cada 10 minutos por nota
+function canEditNote(id) { return myRole(noteById(id)) !== 'view'; }
+
+async function saveVersionNow(c, session, label = '') {
+  try {
+    const bytes = session.snapshot();
+    if (bytes.length > 900000 || bytes.length < 3) return;
+    await state.repo.saveVersion(c.id, bytes, {
+      title: ($('#note-title').value || '').slice(0, 200),
+      preview: (editor?.getText({ blockSeparator: ' ' }) || '').slice(0, 160),
+      label,
+    });
+    localStorage.setItem(`notas-ver-${c.id}`, String(Date.now()));
+  } catch (e) { console.warn('Historial: no se pudo guardar la versión', e); }
+}
+
+function maybeSaveVersion(c, session) {
+  if (!c.versionDirty || !canEditNote(c.id)) return;
+  const last = Number(localStorage.getItem(`notas-ver-${c.id}`) || 0);
+  if (Date.now() - last < VERSION_EVERY) return;
+  c.versionDirty = false;
+  saveVersionNow(c, session);
+}
+
+async function showVersions(noteId) {
+  openSheet('<h2 class="sheet-title">Historial de versiones</h2><p class="sheet-text">Cargando…</p>');
+  let list = [];
+  try { list = await state.repo.listVersions(noteId); } catch (e) { snackbar(`No se pudo leer el historial (${e?.code || 'error'})`); }
+  if (state.current?.id !== noteId) return;
+  openSheet(`<h2 class="sheet-title">Historial de versiones</h2>
+    <p class="sheet-text">Se guarda una versión cada 10 minutos de edición (se conservan las últimas 30). Tocá una para verla o restaurarla.</p>
+    ${list.length ? '' : '<p class="sheet-text">Todavía no hay versiones guardadas de esta nota.</p>'}
+    <div class="picker-list">${list.map((v, i) => `
+      <button class="picker-item ripple version-item" data-v="${i}">
+        ${icon('history')}
+        <span class="rem-text"><strong>${esc(formatWhen(v.at))}${v.label ? ` · ${esc(v.label)}` : ''}</strong>
+        <small>${esc(v.byName || '')}${v.preview ? ` · ${esc(v.preview)}` : ''}</small></span>
+      </button>`).join('')}</div>`, (body) => {
+    body.querySelectorAll('[data-v]').forEach((b) => b.addEventListener('click', () => previewVersion(noteId, list[Number(b.dataset.v)])));
+  });
+}
+
+function versionContent(v) {
+  const doc = new Y.Doc();
+  Y.applyUpdate(doc, v.bytes);
+  const json = yXmlFragmentToProsemirrorJSON(doc.getXmlFragment('default'));
+  const title = doc.getText('title').toString();
+  doc.destroy();
+  return { json, title };
+}
+
+function previewVersion(noteId, v) {
+  let content;
+  try { content = versionContent(v); } catch { snackbar('Esa versión no se puede leer'); return; }
+  const html = generateHTML(content.json?.content?.length ? content.json : { type: 'doc', content: [{ type: 'paragraph' }] }, contentExtensions());
+  openSheet(`<h2 class="sheet-title">Versión del ${esc(formatWhen(v.at))}</h2>
+    <div class="version-preview"><h3>${esc(content.title || 'Sin título')}</h3><div class="ProseMirror">${html}</div></div>
+    <div class="sheet-actions"><button class="text-btn ripple" id="ver-back">Volver</button><span class="spacer"></span>
+      ${canEditNote(noteId) ? '<button class="filled-btn ripple" id="ver-restore">Restaurar esta versión</button>' : ''}</div>`, (body) => {
+    body.querySelectorAll('.version-preview img').forEach(async (img) => {
+      const src = img.getAttribute('src') || '';
+      if (src.startsWith('img:')) { const d = await resolveImage(src); if (d) img.src = d; else img.remove(); }
+    });
+    body.querySelectorAll('.version-preview input[type="checkbox"]').forEach((x) => { x.disabled = true; });
+    body.querySelector('#ver-back').addEventListener('click', () => showVersions(noteId));
+    body.querySelector('#ver-restore')?.addEventListener('click', async () => {
+      const c = state.current;
+      if (!c || c.id !== noteId || !editor) return;
+      closeOverlays();
+      await saveVersionNow(c, c.session, 'Antes de restaurar');
+      editor.commands.setContent(content.json, true);
+      applyTextDiff(c.session.titleText, content.title || '');
+      $('#note-title').value = content.title || '';
+      markDirty();
+      snackbar('Versión restaurada (la anterior quedó guardada en el historial)');
+    });
+  });
+}
+
+/* --- Exportar --- */
+const EXPORTS = [
+  ['pdf', 'PDF', 'application/pdf'],
+  ['docx', 'Word (.docx)', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  ['md', 'Markdown (.md)', 'text/markdown'],
+  ['txt', 'Texto (.txt)', 'text/plain'],
+  ['json', 'Copia de seguridad (.json, se puede importar)', 'application/json'],
+];
+
+// Contenido completo de una nota (con las imágenes resueltas)
+async function noteForExport(n) {
+  let json; let title = n.title || '';
+  if (state.current?.id === n.id && editor) {
+    json = editor.getJSON(); title = $('#note-title').value || title;
+  } else {
+    const s = state.repo.session(n.id, () => {});
+    try {
+      await s.ready();
+      json = yXmlFragmentToProsemirrorJSON(s.fragment);
+      title = s.titleText.toString() || title;
+    } finally { s.destroy(); }
+    if (!json?.content?.length && n.legacy) {
+      json = typeof n.legacy === 'string' ? generateJSON(n.legacy, contentExtensions()) : n.legacy;
+    }
+  }
+  json = await resolveImages(JSON.parse(JSON.stringify(json || { type: 'doc', content: [] })), resolveImage);
+  return {
+    title, json, color: n.color || 'default', pinned: !!n.pinned, archived: !!n.archived,
+    labels: noteLabels(n).map((id) => labelById(id)?.name).filter(Boolean),
+    folders: noteFolders(n).map((id) => folderPath(id)),
+    created: n.created || null, updated: n.updated || null,
+  };
+}
+
+async function unlockForExport(ids) {
+  const locked = ids.map(noteById).filter((n) => n?.locked && !state.unlocked.has(n.id));
+  if (!locked.length) return true;
+  const ok = await unlockNote(locked[0], 'Exportar notas bloqueadas');
+  if (ok) locked.forEach((n) => state.unlocked.add(n.id));
+  return ok;
+}
+
+function openExportSheet(ids) {
+  const many = ids.length > 1;
+  openSheet(`<h2 class="sheet-title">Exportar ${many ? `${ids.length} notas` : 'nota'}</h2>
+    <div class="picker-list">${EXPORTS.map(([k, label], i) => `<button class="picker-item ripple" data-fmt="${k}"><span class="radio${i === 0 ? ' on' : ''}"></span><span>${label}</span></button>`).join('')}</div>
+    ${many ? '<p class="sheet-text">Las notas se juntan en un solo archivo.</p>' : ''}
+    <div class="sheet-actions"><span class="spacer"></span><button class="filled-btn ripple" id="exp-go">Exportar</button></div>`, (body) => {
+    let fmt = 'pdf';
+    body.querySelectorAll('[data-fmt]').forEach((b) => b.addEventListener('click', () => {
+      fmt = b.dataset.fmt;
+      body.querySelectorAll('[data-fmt] .radio').forEach((x) => x.classList.toggle('on', x.parentElement === b));
+    }));
+    body.querySelector('#exp-go').addEventListener('click', async () => {
+      closeOverlays();
+      if (!(await unlockForExport(ids))) return;
+      await exportNotes(ids, fmt);
+    });
+  });
+}
+
+async function exportNotes(ids, fmt) {
+  snackbar('Preparando el archivo…');
+  try {
+    if (state.current && ids.includes(state.current.id)) await saveSummaryNow();
+    const notes = [];
+    for (const id of ids) { const n = noteById(id); if (n) notes.push(await noteForExport(n)); }
+    if (!notes.length) return;
+    const [, , mime] = EXPORTS.find(([k]) => k === fmt);
+    const day = new Date().toISOString().slice(0, 10);
+    const base = notes.length === 1 ? safeName(notes[0].title) : `notas-${day}`;
+    let blob;
+    if (fmt === 'pdf') blob = await toPdf(notes);
+    else if (fmt === 'docx') blob = await toDocx(notes);
+    else if (fmt === 'md') blob = new Blob([notes.map(toMarkdown).join('\n---\n\n')], { type: mime });
+    else if (fmt === 'txt') blob = new Blob([notes.map(toText).join('\n\n----------\n\n')], { type: mime });
+    else blob = new Blob([toBackup(notes.map((n) => ({ ...n, content: n.json, json: undefined })), APP_VERSION)], { type: mime });
+    await deliverFile(`${base}.${fmt}`, blob);
+    hideSnack();
+  } catch (e) {
+    console.error('Exportar', e);
+    snackbar(`No se pudo exportar (${e?.message || 'error'})`);
+  }
+}
+
+/* --- Importar --- */
+async function htmlWithStoredImages(html, noteId) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  for (const img of doc.querySelectorAll('img')) {
+    const src = img.getAttribute('src') || '';
+    if (!src.startsWith('data:')) { if (!/^(https?:|img:)/.test(src)) img.remove(); continue; }
+    try { img.setAttribute('src', await storeImage(noteId, await compressDataUrl(src))); } catch { img.remove(); }
+  }
+  return doc.body.innerHTML;
+}
+
+async function jsonWithStoredImages(json, noteId) {
+  const walk = async (n) => {
+    if (n.type === 'image' && n.attrs?.src?.startsWith('data:')) {
+      try { n.attrs.src = await storeImage(noteId, await compressDataUrl(n.attrs.src)); } catch { n.attrs.src = ''; }
+    }
+    for (const c of n.content || []) await walk(c);
+  };
+  await walk(json);
+  return json;
+}
+
+// Carpetas y etiquetas por nombre (se crean si no existen)
+function labelIdByName(name) {
+  const found = state.org.labels.find((l) => l.name.toLowerCase() === name.toLowerCase());
+  if (found) return found.id;
+  const id = orgId();
+  state.repo.saveLabel({ id, name, color: LABEL_COLORS[state.org.labels.length % LABEL_COLORS.length], created: Date.now() });
+  state.org.labels.push({ id, name });
+  return id;
+}
+function folderIdByPath(path) {
+  let parent = null;
+  for (const part of path.split('›').map((p) => p.trim()).filter(Boolean)) {
+    let f = state.org.folders.find((x) => (x.parentId || null) === parent && x.name.toLowerCase() === part.toLowerCase());
+    if (!f) {
+      f = { id: orgId(), name: part, parentId: parent, created: Date.now() };
+      state.repo.saveFolder(f);
+      state.org.folders.push(f);
+    }
+    parent = f.id;
+  }
+  return parent;
+}
+
+function pickImportFiles() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.multiple = true;
+  input.accept = '.json,.md,.markdown,.txt,.docx,.pdf,.html,.htm,application/json,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/html';
+  input.addEventListener('change', () => importFiles([...input.files]));
+  input.click();
+}
+
+async function importFiles(files) {
+  if (!files.length) return;
+  snackbar('Importando…');
+  let ok = 0; const errors = [];
+  for (const file of files) {
+    try {
+      for (const item of await readImport(file)) {
+        const id = state.repo.newNoteId();
+        let legacy; let text = '';
+        if (item.json) {
+          legacy = await jsonWithStoredImages(item.json, id);
+          text = generateText(legacy);
+        } else {
+          legacy = await htmlWithStoredImages(item.html || '', id);
+          text = new DOMParser().parseFromString(legacy, 'text/html').body.textContent || '';
+        }
+        state.repo.create({ title: item.title || '', preview: text.trim().slice(0, 500), text: text.trim().slice(0, 20000), legacy }, id);
+        const m = item.meta || {};
+        const meta = {};
+        if (m.color) meta.color = m.color;
+        if (m.pinned) meta.pinned = true;
+        if (m.archived) meta.archived = true;
+        if (m.labels?.length) meta.labels = m.labels.map(labelIdByName);
+        if (m.folders?.length) meta.folders = m.folders.map(folderIdByPath);
+        else if (state.filter.kind === 'folder') meta.folders = [state.filter.id];
+        if (Object.keys(meta).length) state.repo.setMeta(id, meta);
+        ok++;
+      }
+    } catch (e) { errors.push(`${file.name}: ${e?.message || 'error'}`); }
+  }
+  if (errors.length) snackbar(`${ok} nota${ok === 1 ? '' : 's'} importada${ok === 1 ? '' : 's'}. No se pudo: ${errors.join('; ')}`);
+  else snackbar(ok === 1 ? 'Nota importada' : `${ok} notas importadas`);
+}
+
+const generateText = (json) => {
+  const parts = [];
+  const walk = (n) => { if (n.type === 'text') parts.push(n.text); (n.content || []).forEach(walk); if (['paragraph', 'heading'].includes(n.type)) parts.push('\n'); };
+  walk(json || {});
+  return parts.join('');
+};
+
+/* --- Notas bloqueadas --- */
+async function unlockNote(n, reason = 'Desbloquear nota') {
+  const r = await verifyUser(reason);
+  if (r.ok) { state.unlocked.add(n.id); return true; }
+  if (!r.unavailable) { if (r.message) snackbar('No se desbloqueó la nota'); return false; }
+  // Sin huella ni bloqueo de pantalla en este dispositivo
+  if (state.mode === 'cloud' && !isNative) {
+    const ok = await openDialog({ title: 'Confirmá que sos vos', text: 'Este navegador no tiene huella disponible. Para abrir la nota, volvé a confirmar tu cuenta de Google.', ok: 'Confirmar con Google' });
+    if (ok && await reauthGoogle()) { state.unlocked.add(n.id); return true; }
+    return false;
+  }
+  const ok = await openDialog({ title: 'Sin huella en este dispositivo', text: isNative ? 'Configurá un bloqueo de pantalla (huella, PIN o patrón) en Android para proteger las notas bloqueadas. ¿Abrirla igual?' : 'Este navegador no tiene huella disponible. ¿Abrir la nota igual?', ok: 'Abrir' });
+  if (ok) state.unlocked.add(n.id);
+  return !!ok;
+}
+
+async function setLocked(ids, value) {
+  if (!value) {
+    const n = noteById(ids[0]);
+    if (!(await unlockNote(n, 'Quitar el bloqueo'))) return;
+  } else {
+    const r = await verifyUser('Bloquear nota');
+    if (!r.ok && !r.unavailable) return;
+    if (r.unavailable) snackbar(isNative ? 'Este teléfono no tiene bloqueo de pantalla: la protección es limitada' : 'Este navegador no tiene huella: se pedirá confirmar con Google');
+  }
+  ids.forEach((id) => { state.repo.setMeta(id, { locked: value }); if (value) state.unlocked.delete(id); });
+  if (value && state.current && ids.includes(state.current.id)) goBack();
+  snackbar(value ? (ids.length > 1 ? 'Notas bloqueadas' : 'Nota bloqueada') : 'Bloqueo quitado');
+}
+
 /* ---------- Inicio ---------- */
 function init() {
   hydrateIcons();
@@ -2149,7 +2501,17 @@ function init() {
 
   // Antes de pasar a segundo plano: subir lo pendiente.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { saveSummaryNow(); state.current?.session?.flush(); }
+    if (document.hidden) {
+      saveSummaryNow(); state.current?.session?.flush();
+      const c = state.current;
+      if (c && c.session) maybeSaveVersion(c, c.session);
+      lockTimer = setTimeout(() => {
+        // Al volver a la app, las notas bloqueadas piden la huella de nuevo
+        state.unlocked.clear();
+        if (state.current && noteById(state.current.id)?.locked) goBack();
+        renderList();
+      }, 60000);
+    } else clearTimeout(lockTimer);
   });
 
   watchAuth((user) => {

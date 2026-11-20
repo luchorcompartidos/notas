@@ -8,6 +8,8 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         // Plugin propio: recibe "Compartir con…" y las acciones del widget y de los accesos directos
         registerPlugin(IntentBridgePlugin.class);
+        // Plugin propio: huella / bloqueo de pantalla para notas bloqueadas
+        registerPlugin(BiometricPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

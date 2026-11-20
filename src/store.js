@@ -37,3 +37,29 @@ export function requestPersistence() {
 export function newId() {
   try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 }
+
+/* Almacén clave-valor de este dispositivo (caché de imágenes, historial sin cuenta) */
+let kvPromise;
+function openKv() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('notas-kv', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('kv');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function kvRun(mode, fn) {
+  kvPromise ||= openKv();
+  const db = await kvPromise;
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('kv', mode);
+    const req = fn(tx.objectStore('kv'));
+    tx.oncomplete = () => resolve(req ? req.result : undefined);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+export const kv = {
+  get: (k) => kvRun('readonly', (s) => s.get(k)).catch(() => undefined),
+  set: (k, v) => kvRun('readwrite', (s) => s.put(v, k)).catch(() => {}),
+  del: (k) => kvRun('readwrite', (s) => s.delete(k)).catch(() => {}),
+};

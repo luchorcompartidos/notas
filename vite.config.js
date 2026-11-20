@@ -11,7 +11,11 @@ function serviceWorker() {
     apply: 'build',
     generateBundle(_options, bundle) {
       const files = new Set(['./', './index.html']);
-      Object.keys(bundle).forEach((f) => files.add(`./${f}`));
+      // Las librerías grandes (exportar/importar) se guardan recién cuando se usan
+      Object.entries(bundle).forEach(([f, item]) => {
+        const size = item.code ? item.code.length : (item.source?.length || 0);
+        if (size < 400000) files.add(`./${f}`);
+      });
       try { readdirSync('public').forEach((f) => files.add(`./${f}`)); } catch { /* sin carpeta public */ }
       files.delete('./sw.js');
       const source = `/* Notas ${version}: archivos de la app para usarla sin conexión */
@@ -54,5 +58,5 @@ export default defineConfig({
     },
     serviceWorker(),
   ],
-  build: { outDir: 'dist', target: 'es2020' },
+  build: { outDir: 'dist', target: 'es2022', chunkSizeWarningLimit: 4000 },
 });

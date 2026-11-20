@@ -58,6 +58,13 @@ if 'NotaRapidaWidget' not in m:
     m = m.replace('</application>', receiver + '    </application>', 1)
 
 open(m_path, 'w', encoding='utf-8').write(m)
+
+# 4. Dependencia para la huella (BiometricPrompt)
+g_path = 'android/app/build.gradle'
+g = open(g_path, encoding='utf-8').read()
+if 'androidx.biometric' not in g:
+    g += "\n// Huella para notas bloqueadas\ndependencies {\n    implementation 'androidx.biometric:biometric:1.1.0'\n}\n"
+    open(g_path, 'w', encoding='utf-8').write(g)
 assert 'android.intent.action.SEND' in m, 'No se pudo agregar "Compartir con…" al manifest'
 assert 'NotaRapidaWidget' in m, 'No se pudo agregar el widget al manifest'
-print('Proyecto Android ajustado: ícono, splash, widget, accesos directos y Compartir con…')
+print('Proyecto Android ajustado: ícono, splash, widget, accesos directos, Compartir con… y huella')

@@ -98,18 +98,51 @@ export function checkTaskItem(editor, id) {
   return done;
 }
 
+// Imagen que puede venir guardada aparte ("img:<nota>/<imagen>"): se resuelve al mostrarla.
+const PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+export const ImagenAparte = Image.extend({
+  addNodeView() {
+    const resolve = this.options.resolve;
+    return ({ node }) => {
+      const img = document.createElement('img');
+      let current = null;
+      const show = (src) => {
+        if (src === current) return;
+        current = src;
+        if (src && src.startsWith('img:')) {
+          img.src = PIXEL; img.classList.add('img-loading');
+          (resolve ? resolve(src) : Promise.resolve(null)).then((d) => {
+            if (current !== src) return;
+            img.classList.remove('img-loading');
+            if (d) img.src = d; else img.classList.add('img-missing');
+          });
+        } else { img.src = src || ''; img.classList.remove('img-loading', 'img-missing'); }
+      };
+      show(node.attrs.src);
+      return { dom: img, update: (n) => { if (n.type.name !== 'image') return false; show(n.attrs.src); return true; } };
+    };
+  },
+});
+
+// Extensiones del contenido (las mismas para mostrar versiones y exportar)
+export function contentExtensions({ resolveImage, reminderIds } = {}) {
+  return [
+    StarterKit.configure({ heading: { levels: [1, 2] }, codeBlock: false, code: false, history: false }),
+    Underline,
+    TaskList,
+    TaskItemConId.configure({ nested: true, reminderIds }),
+    ImagenAparte.configure({ inline: false, allowBase64: true, resolve: resolveImage }),
+    Link.configure({ autolink: true, linkOnPaste: true, openOnClick: false, HTMLAttributes: { rel: 'noopener noreferrer nofollow', target: '_blank' } }),
+  ];
+}
+
 // El contenido vive en el documento Yjs de la nota (fusión de cambios entre dispositivos).
-export function createEditor(element, { ydoc, onUpdate, onState, onCreate, reminderIds }) {
+export function createEditor(element, { ydoc, onUpdate, onState, onCreate, reminderIds, resolveImage }) {
   return new Editor({
     element,
     extensions: [
-      StarterKit.configure({ heading: { levels: [1, 2] }, codeBlock: false, code: false, history: false }),
-      Underline,
-      TaskList,
-      TaskItemConId.configure({ nested: true, reminderIds }),
-      Image.configure({ inline: false, allowBase64: true }),
+      ...contentExtensions({ resolveImage, reminderIds }),
       Placeholder.configure({ placeholder: 'Escribí tu nota…' }),
-      Link.configure({ autolink: true, linkOnPaste: true, openOnClick: false, HTMLAttributes: { rel: 'noopener noreferrer nofollow', target: '_blank' } }),
       Collaboration.configure({ document: ydoc, field: 'default' }),
     ],
     editorProps: {

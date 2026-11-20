@@ -1,6 +1,6 @@
 rules_version = '2';
 
-// Reglas de seguridad de Firestore para Notas (v0.0.10: notas compartidas).
+// Reglas de seguridad de Firestore para Notas (v0.0.12: notas compartidas, imágenes aparte e historial).
 // Se pegan en Firebase → Firestore Database → Reglas → Publicar.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -68,6 +68,20 @@ service cloud.firestore {
 
       // Solo el dueño puede borrarla del todo.
       allow delete: if isOwner(resource.data);
+
+      // Imágenes de la nota, guardadas aparte, y su historial de versiones.
+      match /images/{imageId} {
+        allow read: if isMember(noteData(noteId));
+        allow create: if canEdit(noteData(noteId)) && request.resource.data.by == request.auth.uid;
+        allow delete: if canEdit(noteData(noteId));
+        allow update: if false;
+      }
+      match /versions/{versionId} {
+        allow read: if isMember(noteData(noteId));
+        allow create: if canEdit(noteData(noteId)) && request.resource.data.by == request.auth.uid;
+        allow delete: if canEdit(noteData(noteId));
+        allow update: if false;
+      }
 
       // Cambios de Yjs (el contenido de la nota).
       match /updates/{updateId} {

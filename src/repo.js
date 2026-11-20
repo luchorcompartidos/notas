@@ -10,14 +10,16 @@
  *   users/{uid}/settings/prefs → preferencias (plazo de la papelera, orden)
  *   users/{uid}/reminders/* → recordatorios (por nota o por casilla), de cada usuario
  *   invites/{noteId}_{email} → invitaciones para compartir una nota (rol: edit | view)
+ *   notes/{id}/images/*   → imágenes de la nota, guardadas aparte (la nota solo lleva "img:<nota>/<imagen>")
+ *   notes/{id}/versions/* → historial de versiones (estado completo de Yjs cada tanto)
  * LocalRepo (sin cuenta): todo en este dispositivo (IndexedDB).
  */
 import {
   collection, doc, query, where, onSnapshot, setDoc, updateDoc, getDocs, writeBatch, deleteDoc,
-  arrayUnion, arrayRemove, deleteField,
+  arrayUnion, arrayRemove, deleteField, getDoc, orderBy, limit, Bytes,
 } from 'firebase/firestore';
 import { NoteSession } from './sync.js';
-import { store, newId } from './store.js';
+import { store, newId, kv } from './store.js';
 
 const emptySummary = () => ({ title: '', preview: '', checks: { done: 0, total: 0 }, thumb: null });
 const DEFAULT_SETTINGS = { trashDays: 30 };
@@ -96,6 +98,46 @@ export class CloudRepo {
     }, (err) => { this.error = err; this.onChange(); });
   }
 
+  /* ---------- Imágenes guardadas aparte ---------- */
+  async saveImage(noteId, dataUrl) {
+    const ref = doc(collection(this.db, 'notes', noteId, 'images'));
+    const key = `img:${noteId}/${ref.id}`;
+    await kv.set(key, dataUrl); // disponible enseguida en este dispositivo, aun sin conexión
+    this.track(setDoc(ref, { data: dataUrl, by: this.uid, at: Date.now() })); // se sube al haber conexión
+    return key;
+  }
+
+  async getImage(key) {
+    const m = /^img:([^/]+)\/(.+)$/.exec(key || '');
+    if (!m) return null;
+    const cached = await kv.get(key);
+    if (cached) return cached;
+    try {
+      const d = await getDoc(doc(this.db, 'notes', m[1], 'images', m[2]));
+      const data = d.data()?.data || null;
+      if (data) kv.set(key, data);
+      return data;
+    } catch { return null; }
+  }
+
+  /* ---------- Historial de versiones ---------- */
+  async saveVersion(noteId, bytes, info) {
+    await this.track(setDoc(doc(collection(this.db, 'notes', noteId, 'versions')), {
+      s: Bytes.fromUint8Array(bytes), at: Date.now(), by: this.uid, byName: this.profile.name || this.profile.email, ...info,
+    }));
+    // Se conservan las 30 más recientes
+    try {
+      const all = await getDocs(query(collection(this.db, 'notes', noteId, 'versions'), orderBy('at', 'desc')));
+      const old = all.docs.slice(30);
+      if (old.length) { const b = writeBatch(this.db); old.forEach((d) => b.delete(d.ref)); await b.commit(); }
+    } catch { /* nada */ }
+  }
+
+  async listVersions(noteId) {
+    const s = await getDocs(query(collection(this.db, 'notes', noteId, 'versions'), orderBy('at', 'desc'), limit(30)));
+    return s.docs.map((d) => { const v = d.data(); return { id: d.id, at: v.at, byName: v.byName, title: v.title, preview: v.preview, bytes: v.s?.toUint8Array() }; });
+  }
+
   /* ---------- Compartir ---------- */
   me() { return { name: this.profile.name, email: this.profile.email }; }
 
@@ -163,8 +205,10 @@ export class CloudRepo {
       .finally(() => { this.pending--; this.onChange(); });
   }
 
-  create(extra = {}) {
-    const ref = doc(collection(this.db, 'notes'));
+  newNoteId() { return doc(collection(this.db, 'notes')).id; }
+
+  create(extra = {}, id = null) {
+    const ref = id ? doc(this.db, 'notes', id) : doc(collection(this.db, 'notes'));
     const now = Date.now();
     this.track(setDoc(ref, {
       owner: this.uid, memberIds: [this.uid], ...emptySummary(), created: now, updated: now, ...extra,
@@ -226,8 +270,10 @@ export class LocalRepo {
     this.cb?.(this.list());
   }
 
-  create(extra = {}) {
-    const id = newId();
+  newNoteId() { return newId(); }
+
+  create(extra = {}, givenId = null) {
+    const id = givenId || newId();
     const now = Date.now();
     this.items.set(id, { id, ...emptySummary(), ...META_DEFAULTS, created: now, updated: now, ...extra });
     this.persist(id);
@@ -282,6 +328,18 @@ export class LocalRepo {
   canPurge() { return true; }
 
   get canShare() { return false; }
+
+  // Sin cuenta, las imágenes quedan dentro de la nota (en este dispositivo no hay límite de tamaño)
+  async saveImage(_noteId, dataUrl) { return dataUrl; }
+  async getImage() { return null; }
+
+  async saveVersion(noteId, bytes, info) {
+    const list = (await kv.get(`versiones:${noteId}`)) || [];
+    list.unshift({ id: newId(), at: Date.now(), byName: 'Este dispositivo', bytes, ...info });
+    await kv.set(`versiones:${noteId}`, list.slice(0, 20));
+  }
+
+  async listVersions(noteId) { return (await kv.get(`versiones:${noteId}`)) || []; }
   roleOf() { return 'owner'; }
   subscribeInvites(cb) { cb([]); }
 
