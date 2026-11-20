@@ -471,7 +471,7 @@ function showVersion() {
   const r = state.release;
   openSheet(`
     <h2 class="sheet-title">Notas v${esc(APP_VERSION)}</h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Prueba de concepto, Parte 2A</p>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Prueba de concepto, Parte 2B</p>
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);
@@ -493,9 +493,7 @@ $('#btn-sync').addEventListener('click', () => {
     openSheet(`
       <h2 class="sheet-title">Sin cuenta</h2>
       <p class="sheet-text">Tus notas se guardan solo en este dispositivo y no se sincronizan.</p>
-      ${isNative
-        ? '<p class="sheet-text">El inicio de sesión en la app de Android llega en la versión 0.0.3.</p>'
-        : '<button class="text-btn ripple" id="btn-signin">Iniciar sesión con Google</button>'}
+      <button class="text-btn ripple" id="btn-signin">Iniciar sesión con Google</button>
     `, (body) => body.querySelector('#btn-signin')?.addEventListener('click', async () => {
       try { await signInGoogle(); location.reload(); } catch (e) { const m = authErrorMessage(e); if (m) snackbar(m); }
     }));
@@ -536,13 +534,14 @@ function startLocal() {
 
 function showLogin() {
   state.mode = null;
-  $('#login-native-hint').hidden = !isNative;
-  $('#btn-google').hidden = isNative;
   setView('login');
 }
 
 $('#btn-google').addEventListener('click', async () => {
+  const b = $('#btn-google');
+  b.disabled = true;
   try { await signInGoogle(); } catch (e) { const m = authErrorMessage(e); if (m) snackbar(m); }
+  finally { b.disabled = false; }
 });
 $('#btn-local').addEventListener('click', startLocal);
 
@@ -629,16 +628,11 @@ function init() {
     if (document.hidden) { saveSummaryNow(); state.current?.session?.flush(); }
   });
 
-  if (isNative) {
-    // Parte 2A: en el APK todavía no hay inicio de sesión (llega en la 0.0.3).
-    if (localStorage.getItem('notas-mode') === 'local') startLocal(); else showLogin();
-  } else {
-    watchAuth((user) => {
-      if (user) startCloud(user);
-      else if (localStorage.getItem('notas-mode') === 'local') startLocal();
-      else showLogin();
-    });
-  }
+  watchAuth((user) => {
+    if (user) startCloud(user);
+    else if (localStorage.getItem('notas-mode') === 'local') startLocal();
+    else showLogin();
+  });
   checkUpdates();
 }
 

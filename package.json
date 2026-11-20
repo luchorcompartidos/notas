@@ -1,7 +1,7 @@
 {
   "name": "notas",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor-firebase/authentication": "^7.0.0",
     "@capacitor/android": "^7.0.0",
     "@capacitor/app": "^7.0.0",
     "@capacitor/core": "^7.0.0",
@@ -28,6 +29,7 @@
     "firebase": "^11.0.0",
     "y-indexeddb": "^9.0.0",
     "y-prosemirror": "^1.2.0",
+    "y-protocols": "^1.0.6",
     "yjs": "^13.6.0"
   },
   "devDependencies": {

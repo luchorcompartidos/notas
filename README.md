@@ -14,7 +14,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | 2A | v0.0.2 | Inicio de sesión con Google (web) y sincronización con fusión de cambios |
 | 2B | v0.0.3 | Inicio de sesión nativo en Android y firma fija del APK |
 
-En la v0.0.2, la app Android funciona **sin cuenta** (notas solo en el dispositivo).
+Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
 
 ## Cómo funciona la sincronización
 
@@ -40,5 +40,6 @@ También se puede lanzar a mano: *Actions → CI → Run workflow* y elegir el t
 
 ## Notas técnicas
 
-- El APK de la v0.0.2 todavía es *debug*. La firma fija llega en la 2B (Secrets ya cargados).
-- `config/google-services.json` es para la 2B (inicio de sesión nativo en Android).
+- El APK se firma con la clave fija guardada en los Secrets del repo (`ANDROID_KEYSTORE_BASE64`,
+  `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`). Su SHA-1 está registrada en Firebase.
+- `config/google-services.json` configura Firebase en Android (inicio de sesión nativo con Google).

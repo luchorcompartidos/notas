@@ -84,7 +84,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --no-audit --no-fund
+      - run: npm install --no-audit --no-fund --legacy-peer-deps
       - run: npm run build
         env:
           VITE_APP_VERSION: ${{ needs.version.outputs.version }}
@@ -100,6 +100,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      NOTAS_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      NOTAS_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -109,7 +112,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - run: npm install --no-audit --no-fund
+      - run: npm install --no-audit --no-fund --legacy-peer-deps
       - run: npm run build
         env:
           VITE_APP_VERSION: ${{ env.VERSION }}
@@ -123,16 +126,63 @@ jobs:
           MANIFEST=android/app/src/main/AndroidManifest.xml
           grep -q windowSoftInputMode "$MANIFEST" || sed -i 's/android:launchMode="singleTask"/android:launchMode="singleTask" android:windowSoftInputMode="adjustResize"/' "$MANIFEST"
           grep -n "versionCode\|versionName" android/app/build.gradle
+      - name: Firebase e inicio de sesión con Google
+        run: |
+          cp config/google-services.json android/app/google-services.json
+          # El plugin de autenticación necesita incluir el proveedor de Google
+          sed -i 's/^ext {/ext {\n    rgcfaIncludeGoogle = true/' android/variables.gradle
+          grep -q "rgcfaIncludeGoogle" android/variables.gradle || echo "::error::No se pudo activar Google en variables.gradle"
+          grep -q "com.google.gms:google-services" android/build.gradle || echo "::warning::android/build.gradle no tiene el plugin google-services"
+      - name: Firma fija del APK
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::warning title=Sin firma fija::No están los Secrets de la clave de firma; se compila con firma de prueba."
+            exit 0
+          fi
+          printf "%s" "$KEYSTORE_B64" | tr -d " \r\n" | base64 -d > "$RUNNER_TEMP/notas-release.jks"
+          echo "NOTAS_KEYSTORE_PATH=$RUNNER_TEMP/notas-release.jks" >> "$GITHUB_ENV"
+          cat >> android/app/build.gradle <<'GRADLE'
+
+          // Firma fija (la clave llega desde los Secrets del repo)
+          def notasKeystore = System.getenv("NOTAS_KEYSTORE_PATH")
+          if (notasKeystore) {
+              android {
+                  signingConfigs {
+                      notas {
+                          storeFile file(notasKeystore)
+                          storePassword System.getenv("NOTAS_KEYSTORE_PASSWORD")
+                          keyAlias System.getenv("NOTAS_KEY_ALIAS")
+                          keyPassword System.getenv("NOTAS_KEYSTORE_PASSWORD")
+                      }
+                  }
+                  buildTypes {
+                      release { signingConfig signingConfigs.notas }
+                      debug { signingConfig signingConfigs.notas }
+                  }
+              }
+          }
+          GRADLE
       - run: npx cap sync android
       - name: Compilar APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          if [ -n "$NOTAS_KEYSTORE_PATH" ]; then
+            ./gradlew assembleRelease --no-daemon --stacktrace
+          else
+            ./gradlew assembleDebug --no-daemon --stacktrace
+          fi
       - name: Renombrar APK
         run: |
           mkdir -p out
-          cp android/app/build/outputs/apk/debug/app-debug.apk "out/notas-v${VERSION}.apk"
+          if [ -n "$NOTAS_KEYSTORE_PATH" ]; then
+            APK=android/app/build/outputs/apk/release/app-release.apk
+          else
+            APK=android/app/build/outputs/apk/debug/app-debug.apk
+          fi
+          cp "$APK" "out/notas-v${VERSION}.apk"
+          # Verificar la huella de la firma (debe coincidir con la SHA-1 cargada en Firebase)
+          "$ANDROID_HOME"/build-tools/$(ls "$ANDROID_HOME"/build-tools | sort -V | tail -1)/apksigner verify --print-certs "out/notas-v${VERSION}.apk" | grep -i "SHA-1" || true
       - uses: actions/upload-artifact@v4
         with:
           name: notas-v${{ env.VERSION }}
