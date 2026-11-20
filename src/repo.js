@@ -7,7 +7,8 @@
  *                           carpetas y etiquetas de la nota
  *   users/{uid}/folders/* → carpetas (con parentId para subcarpetas)
  *   users/{uid}/labels/*  → etiquetas (nombre y color)
- *   users/{uid}/settings/prefs → preferencias (plazo de la papelera)
+ *   users/{uid}/settings/prefs → preferencias (plazo de la papelera, orden)
+ *   users/{uid}/reminders/* → recordatorios (por nota o por casilla), de cada usuario
  * LocalRepo (sin cuenta): todo en este dispositivo (IndexedDB).
  */
 import {
@@ -84,6 +85,15 @@ export class CloudRepo {
   deleteLabel(id) { this.track(deleteDoc(doc(this.db, 'users', this.uid, 'labels', id))); }
   saveSettings(patch) { this.track(setDoc(doc(this.db, 'users', this.uid, 'settings', 'prefs'), patch, { merge: true })); }
   canPurge(note) { return note.owner === this.uid; }
+
+  subscribeReminders(cb) {
+    this.unsubRem = onSnapshot(collection(this.db, 'users', this.uid, 'reminders'), (s) => {
+      cb(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, (err) => { this.error = err; this.onChange(); });
+  }
+
+  saveReminder({ id, ...data }) { this.track(setDoc(doc(this.db, 'users', this.uid, 'reminders', id), data, { merge: true })); }
+  deleteReminder(id) { this.track(deleteDoc(doc(this.db, 'users', this.uid, 'reminders', id))); }
 
   track(promise) {
     this.pending++; this.onChange();
@@ -208,4 +218,22 @@ export class LocalRepo {
   deleteLabel(id) { delete this.org.labels[id]; this.emitOrg(); }
   saveSettings(patch) { Object.assign(this.org.settings, patch); this.emitOrg(); }
   canPurge() { return true; }
+
+  loadReminders() {
+    try { return JSON.parse(localStorage.getItem('notas-recordatorios')) || {}; } catch { return {}; }
+  }
+
+  subscribeReminders(cb) {
+    this.rem = this.loadReminders();
+    this.remCb = cb;
+    cb(Object.values(this.rem));
+  }
+
+  emitReminders() {
+    localStorage.setItem('notas-recordatorios', JSON.stringify(this.rem));
+    this.remCb?.(Object.values(this.rem));
+  }
+
+  saveReminder(r) { this.rem[r.id] = { ...(this.rem[r.id] || {}), ...r }; this.emitReminders(); }
+  deleteReminder(id) { delete this.rem[id]; this.emitReminders(); }
 }

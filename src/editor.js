@@ -7,16 +7,105 @@ import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import Collaboration from '@tiptap/extension-collaboration';
 import { ySyncPluginKey } from 'y-prosemirror';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
+
+const rid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+const reminderKey = new PluginKey('casillasConRecordatorio');
+
+// Cada casilla lleva un id fijo (para poder ponerle un recordatorio) y se marca si tiene uno.
+const TaskItemConId = TaskItem.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      id: {
+        default: null,
+        keepOnSplit: false,
+        parseHTML: (el) => el.getAttribute('data-id'),
+        renderHTML: (attrs) => (attrs.id ? { 'data-id': attrs.id } : {}),
+      },
+    };
+  },
+  addProseMirrorPlugins() {
+    const getIds = this.options.reminderIds;
+    return [
+      ...(this.parent?.() || []),
+      new Plugin({
+        key: new PluginKey('idsDeCasillas'),
+        appendTransaction: (trs, _old, state) => {
+          if (!trs.some((t) => t.docChanged)) return null;
+          let tr = null; const seen = new Set();
+          state.doc.descendants((node, pos) => {
+            if (node.type.name !== 'taskItem') return;
+            const id = node.attrs.id;
+            if (!id || seen.has(id)) { tr = tr || state.tr; tr.setNodeMarkup(pos, undefined, { ...node.attrs, id: rid() }); } else seen.add(id);
+          });
+          return tr;
+        },
+      }),
+      new Plugin({
+        key: reminderKey,
+        props: {
+          decorations: (state) => {
+            const ids = getIds?.() || new Set();
+            if (!ids.size) return null;
+            const decos = [];
+            state.doc.descendants((node, pos) => {
+              if (node.type.name === 'taskItem' && ids.has(node.attrs.id)) decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'has-reminder' }));
+            });
+            return DecorationSet.create(state.doc, decos);
+          },
+        },
+      }),
+    ];
+  },
+});
+
+// Vuelve a dibujar las marcas de recordatorio de las casillas
+export function refreshReminderMarks(editor) {
+  if (editor && !editor.isDestroyed) editor.view.dispatch(editor.state.tr.setMeta(reminderKey, true));
+}
+
+// Casilla en la que está el cursor (o null)
+export function currentTaskItem(editor) {
+  const { $from } = editor.state.selection;
+  for (let d = $from.depth; d > 0; d--) {
+    const node = $from.node(d);
+    if (node.type.name === 'taskItem') return { id: node.attrs.id, text: node.textContent.trim(), checked: !!node.attrs.checked };
+  }
+  return null;
+}
+
+// Estado de las casillas de la nota: id → { checked, text }
+export function taskItems(editor) {
+  const map = new Map();
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === 'taskItem' && node.attrs.id) map.set(node.attrs.id, { checked: !!node.attrs.checked, text: node.textContent.trim() });
+  });
+  return map;
+}
+
+// Tildar una casilla por su id (desde la notificación "Hecho")
+export function checkTaskItem(editor, id) {
+  let done = false;
+  editor.state.doc.descendants((node, pos) => {
+    if (!done && node.type.name === 'taskItem' && node.attrs.id === id) {
+      editor.view.dispatch(editor.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: true }));
+      done = true;
+    }
+  });
+  return done;
+}
 
 // El contenido vive en el documento Yjs de la nota (fusión de cambios entre dispositivos).
-export function createEditor(element, { ydoc, onUpdate, onState, onCreate }) {
+export function createEditor(element, { ydoc, onUpdate, onState, onCreate, reminderIds }) {
   return new Editor({
     element,
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2] }, codeBlock: false, code: false, history: false }),
       Underline,
       TaskList,
-      TaskItem.configure({ nested: true }),
+      TaskItemConId.configure({ nested: true, reminderIds }),
       Image.configure({ inline: false, allowBase64: true }),
       Placeholder.configure({ placeholder: 'Escribí tu nota…' }),
       Collaboration.configure({ document: ydoc, field: 'default' }),

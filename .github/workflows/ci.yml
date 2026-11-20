@@ -162,6 +162,17 @@ jobs:
               }
           }
           GRADLE
+      - name: Notificaciones (permisos e ícono)
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          grep -q SCHEDULE_EXACT_ALARM "$MANIFEST" || sed -i 's#</manifest>#    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />\n</manifest>#' "$MANIFEST"
+          mkdir -p android/app/src/main/res/drawable
+          cat > android/app/src/main/res/drawable/ic_stat_notas.xml <<'XML'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+            <path android:fillColor="#FFFFFFFF" android:pathData="M14,2H6C4.9,2 4,2.9 4,4v16c0,1.1 0.9,2 2,2h12c1.1,0 2,-0.9 2,-2V8L14,2zM16,18H8v-2h8V18zM16,14H8v-2h8V14zM13,9V3.5L18.5,9H13z"/>
+          </vector>
+          XML
+          tail -5 "$MANIFEST"
       - run: npx cap sync android
       - name: Compilar APK
         working-directory: android

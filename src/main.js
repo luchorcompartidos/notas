@@ -1,7 +1,14 @@
 import './styles.css';
 import { hydrateIcons, icon } from './icons.js';
 import { requestPersistence } from './store.js';
-import { createEditor, runCommand, isActive, summarize, compressImage, makeThumb } from './editor.js';
+import {
+  createEditor, runCommand, isActive, summarize, compressImage, makeThumb,
+  refreshReminderMarks, currentTaskItem, taskItems, checkTaskItem,
+} from './editor.js';
+import {
+  REPEATS, SNOOZE_MIN, nextOccurrence, formatWhen, initNativeReminders, ensureNativePermissions,
+  syncNative, syncWeb, askWebNotifications, showWebNotification,
+} from './reminders.js';
 import { initNative, setStatusBar, haptic, minimizeApp, isNative } from './native.js';
 import { APP_VERSION, CHANGELOG_URL, getLatestRelease, isNewer, formatDate } from './version.js';
 import { applyTextDiff } from './sync.js';
@@ -28,6 +35,7 @@ const state = {
   purged: false,
   search: { active: false, q: '', folder: null, label: null, color: null, checks: null, days: null, archived: false },
   layout: localStorage.getItem('notas-layout') || 'grid',
+  reminders: [],
 };
 
 const SORTS = [['updated', 'Fecha de modificación'], ['created', 'Fecha de creación'], ['title', 'Título (A-Z)'], ['manual', 'Manual (arrastrar)']];
@@ -104,12 +112,29 @@ function openMenu(anchor, items) {
     b.onclick = () => { closeOverlays(); it.onClick?.(); };
     menu.appendChild(b);
   });
-  const r = anchor.getBoundingClientRect();
-  menu.style.top = `${r.bottom - 4}px`;
-  menu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
   menu.hidden = false;
+  placePopup(menu, anchor.getBoundingClientRect());
   requestAnimationFrame(() => menu.classList.add('open'));
   $('#scrim').classList.add('show', 'clear');
+}
+
+// Ubica un menú junto a su botón sin salirse nunca de la pantalla (ni por los costados ni abajo).
+function placePopup(el, r) {
+  const m = 8;
+  const vw = window.innerWidth; const vh = window.innerHeight;
+  Object.assign(el.style, { left: '0px', top: '0px', right: 'auto', bottom: 'auto', maxWidth: `${vw - m * 2}px`, maxHeight: `${Math.min(vh * 0.7, vh - m * 2)}px` });
+  const w = el.offsetWidth; const h = el.offsetHeight;
+  // Alineado al lado del botón que queda más cerca del centro de la pantalla
+  let left = (r.left + r.width / 2) < vw / 2 ? r.left : r.right - w;
+  left = Math.max(m, Math.min(left, vw - w - m));
+  let top = r.bottom + 4;
+  let fromTop = true;
+  if (top + h > vh - m) {
+    if (r.top - h - 4 >= m) { top = r.top - h - 4; fromTop = false; } else top = Math.max(m, vh - h - m);
+  }
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+  el.style.transformOrigin = `${left <= r.left + 1 ? 'left' : 'right'} ${fromTop ? 'top' : 'bottom'}`;
 }
 
 function openSheet(html, onReady) {
@@ -221,6 +246,7 @@ function matchesFilter(n, f = state.filter) {
   if (f.kind === 'templates') return !!n.template && !n.trashed;
   if (n.template && f.kind !== 'trash') return false;
   switch (f.kind) {
+    case 'reminders': return !n.trashed && activeReminders(n.id).length > 0;
     case 'archive': return n.archived && !n.trashed;
     case 'trash': return n.trashed;
     case 'folder': return !n.trashed && !n.archived && (n.folders || []).includes(f.id);
@@ -232,6 +258,7 @@ function matchesFilter(n, f = state.filter) {
 function filterTitle(f = state.filter) {
   if (f.kind === 'archive') return 'Archivo';
   if (f.kind === 'templates') return 'Plantillas';
+  if (f.kind === 'reminders') return 'Recordatorios';
   if (f.kind === 'trash') return 'Papelera';
   if (f.kind === 'folder') return folderPath(f.id) || 'Carpeta';
   if (f.kind === 'label') return labelById(f.id)?.name || 'Etiqueta';
@@ -271,6 +298,8 @@ function onList(list) {
     if (m && state.view !== 'editor') openNote(m[1], { push: false });
   }
   maybePurge();
+  scheduleReminders();
+  if (pendingOpenNote && list.some((n) => n.id === pendingOpenNote)) { const id = pendingOpenNote; pendingOpenNote = null; openNote(id); }
 }
 
 function onOrg(org) {
@@ -284,6 +313,9 @@ function onOrg(org) {
 }
 
 function sortNotes(list) {
+  if (state.filter.kind === 'reminders' && !state.search.active) {
+    return [...list].sort((a, b) => (nextOf(a.id)?.t || Infinity) - (nextOf(b.id)?.t || Infinity));
+  }
   const mode = state.org.settings.sort || 'updated';
   const title = (n) => (n.title || n.preview || '').trim();
   const cmp = {
@@ -296,7 +328,7 @@ function sortNotes(list) {
   return [...list].sort(cmp);
 }
 
-const manualMode = () => (state.org.settings.sort === 'manual') && !state.search.active && state.filter.kind !== 'trash';
+const manualMode = () => (state.org.settings.sort === 'manual') && !state.search.active && !['trash', 'reminders'].includes(state.filter.kind);
 
 // Cuadrícula tipo "mosaico": columnas que se llenan de izquierda a derecha (el orden se lee por filas)
 function columnCount() {
@@ -318,7 +350,7 @@ function renderList() {
   const f = state.filter;
   const searching = state.search.active;
   const visible = sortNotes(state.notes.filter((n) => (searching ? matchesSearch(n) : matchesFilter(n))));
-  const usePinned = !searching && !['archive', 'trash', 'templates'].includes(f.kind);
+  const usePinned = !searching && !['archive', 'trash', 'templates', 'reminders'].includes(f.kind);
   const pinned = usePinned ? visible.filter((n) => n.pinned) : [];
   const others = usePinned ? visible.filter((n) => !n.pinned) : visible;
 
@@ -327,7 +359,7 @@ function renderList() {
   fillGrid($('#grid-others'), others);
   $('#pinned-wrap').hidden = pinned.length === 0;
   $('#others-label').hidden = pinned.length === 0 || others.length === 0;
-  $('#fab').hidden = searching || ['archive', 'trash'].includes(f.kind);
+  $('#fab').hidden = searching || ['archive', 'trash', 'reminders'].includes(f.kind);
   $('#btn-layout').innerHTML = icon(state.layout === 'list' ? 'viewGrid' : 'viewList');
   $('#btn-layout').setAttribute('aria-label', state.layout === 'list' ? 'Ver en cuadrícula' : 'Ver en lista');
 
@@ -361,6 +393,7 @@ function renderList() {
   const emptyTexts = {
     notes: 'Las notas que crees aparecen acá', archive: 'Las notas archivadas aparecen acá',
     trash: 'No hay notas en la papelera', folder: 'Esta carpeta no tiene notas', label: 'No hay notas con esta etiqueta',
+    reminders: 'No hay recordatorios pendientes. Para crear uno, abrí una nota y tocá la campana.',
     templates: 'Todavía no hay plantillas. Creá una con el botón +, o desde una nota: menú ⋮ → «Guardar como plantilla».',
   };
   $('#empty-text').textContent = searching ? 'No se encontraron notas' : (emptyTexts[f.kind] || emptyTexts.notes);
@@ -403,12 +436,21 @@ function cardEl(n) {
     el.appendChild(m);
   }
 
-  // Etiquetas y carpetas de la nota
+  // Recordatorio, etiquetas y carpetas de la nota
   const labels = noteLabels(n);
   const folders = noteFolders(n);
-  if (labels.length || folders.length) {
+  const next = n.trashed ? null : nextOf(n.id);
+  if (labels.length || folders.length || next) {
     const row = document.createElement('div');
     row.className = 'card-chips';
+    if (next) {
+      const overdue = !next.r.repeat && next.t < Date.now();
+      const b = document.createElement('button');
+      b.className = `mini-chip mini-chip-btn${overdue ? ' overdue' : ''}`;
+      b.innerHTML = `${icon(next.r.repeat ? 'repeat' : 'bell')}<span>${esc(formatWhen(next.t))}</span>`;
+      b.addEventListener('click', (e) => { e.stopPropagation(); openReminderSheet(n.id); });
+      row.appendChild(b);
+    }
     labels.slice(0, 3).forEach((id) => {
       const l = labelById(id);
       const c = document.createElement('span');
@@ -474,6 +516,8 @@ function paintEditorChrome() {
   $('#trash-banner').hidden = !trashed;
   $('#toolbar').hidden = trashed;
   $('#btn-pin').hidden = trashed;
+  $('#btn-reminder').hidden = trashed;
+  $('#btn-reminder').classList.toggle('active', activeReminders(c.id).length > 0);
   $('#btn-color').hidden = trashed;
   $('#note-title').readOnly = trashed;
   if (editor && editor.isEditable === trashed) editor.setEditable(!trashed);
@@ -538,7 +582,8 @@ async function openNote(id, { push = true, isNew = false, meta = {} } = {}) {
 
   editor = createEditor($('#editor'), {
     ydoc: session.ydoc,
-    onUpdate: (ed, remote) => { if (!remote) markDirty(); },
+    onUpdate: (ed, remote) => { if (!remote) { markDirty(); checkCasillaReminders(); } },
+    reminderIds: reminderItemIds,
     onState: (ed) => updateToolbar(ed),
     onCreate: (ed) => {
       if (needsSeed && c.legacy) {
@@ -672,6 +717,7 @@ function bindEditorUi() {
   });
 
   $('#btn-back').addEventListener('click', goBack);
+  $('#btn-reminder').addEventListener('click', () => openReminderSheet(state.current.id));
 
   $('#btn-pin').addEventListener('click', () => {
     const c = state.current;
@@ -763,7 +809,7 @@ function showVersion() {
   const r = state.release;
   openSheet(`
     <h2 class="sheet-title">Notas v${esc(APP_VERSION)}</h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 1B: buscar y ordenar</p>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 2: recordatorios</p>
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);
@@ -806,6 +852,7 @@ function startRepo(repo, mode) {
   repo.onChange = () => { updateSyncIcon(); updateNoteStatus(); };
   repo.subscribe(onList);
   repo.subscribeOrg(onOrg);
+  repo.subscribeReminders(onReminders);
   updateSyncIcon();
   setView('list');
 }
@@ -993,6 +1040,7 @@ function renderDrawer() {
     <div class="drawer-section"><span>Etiquetas</span><button class="icon-btn small ripple" id="drawer-new-label" aria-label="Nueva etiqueta">${icon('add')}</button></div>
     ${labels.join('') || '<p class="drawer-empty">Todavía no hay etiquetas</p>'}
     <div class="drawer-divider"></div>
+    ${item('reminders', null, icon('bell'), `Recordatorios (${state.notes.filter((n) => !n.trashed && activeReminders(n.id).length).length})`)}
     ${item('templates', null, icon('template'), `Plantillas (${count((n) => n.template && !n.trashed)})`)}
     ${item('archive', null, icon('archive'), `Archivo (${count((n) => n.archived && !n.trashed && !n.template)})`)}
     ${item('trash', null, icon('delete'), `Papelera (${count((n) => n.trashed)})`)}
@@ -1201,7 +1249,7 @@ async function deleteForever(ids) {
   if (!r) return false;
   ids.forEach((id) => {
     const n = noteById(id);
-    if (n && state.repo.canPurge(n)) state.repo.removeCompletely(id);
+    if (n && state.repo.canPurge(n)) { state.repo.removeCompletely(id); removeNoteReminders(id); }
   });
   snackbar(ids.length > 1 ? 'Notas eliminadas' : 'Nota eliminada');
   return true;
@@ -1343,7 +1391,7 @@ function maybePurge() {
   const now = Date.now();
   state.notes.filter((n) => n.trashed).forEach((n) => {
     if (!n.trashedAt) { state.repo.setMeta(n.id, { trashedAt: now }); return; } // empieza a contar el plazo
-    if (days > 0 && now - n.trashedAt > days * 86400000 && state.repo.canPurge(n)) state.repo.removeCompletely(n.id);
+    if (days > 0 && now - n.trashedAt > days * 86400000 && state.repo.canPurge(n)) { state.repo.removeCompletely(n.id); removeNoteReminders(n.id); }
   });
 }
 
@@ -1562,6 +1610,231 @@ function pickTemplate() {
   fab.addEventListener('contextmenu', (e) => e.preventDefault());
 })();
 
+/* ---------- Fase 2: recordatorios ---------- */
+const activeReminders = (noteId) => state.reminders.filter((r) => !r.done && (!noteId || r.noteId === noteId));
+const nextOf = (noteId) => {
+  const list = activeReminders(noteId);
+  if (!list.length) return null;
+  return list.map((r) => ({ r, t: nextOccurrence(r) })).sort((a, b) => a.t - b.t)[0];
+};
+const reminderItemIds = () => new Set(activeReminders(state.current?.id).filter((r) => r.itemId).map((r) => r.itemId));
+
+function onReminders(list) {
+  state.reminders = list;
+  scheduleReminders();
+  renderList();
+  renderDrawer();
+  paintEditorChrome();
+  refreshReminderMarks(editor);
+}
+
+function describeReminder(r) {
+  const n = noteById(r.noteId);
+  if (!n || n.trashed) return null;
+  const title = n.title || (r.itemId ? 'Casilla pendiente' : 'Recordatorio');
+  const body = r.itemId ? `☐ ${r.itemText || 'Casilla'}` : (n.preview ? n.preview.slice(0, 160) : 'Tocá para abrir la nota');
+  return { title, body };
+}
+
+let scheduleTimer;
+function scheduleReminders() {
+  clearTimeout(scheduleTimer);
+  scheduleTimer = setTimeout(() => {
+    const act = activeReminders();
+    syncNative(act, describeReminder);
+    syncWeb(act, describeReminder, onWebReminder);
+  }, 400);
+}
+
+function onWebReminder(r, d) {
+  haptic();
+  if (!showWebNotification(d.title, d.body, r.id, () => openNote(r.noteId))) { /* sin permiso: solo el aviso de la app */ }
+  snackbar(`🔔 ${d.title}${r.itemId ? ` · ${r.itemText}` : ''}`, 'Abrir', () => openNote(r.noteId));
+  renderList();
+  if (r.repeat) scheduleReminders();
+}
+
+// Acciones de la notificación de Android
+let pendingOpenNote = null;
+async function handleReminderAction(actionId, rid, noteId) {
+  const r = state.reminders.find((x) => x.id === rid);
+  if (actionId === 'done' && r) { await completeReminder(r); return; }
+  if (actionId === 'snooze' && r) {
+    state.repo.saveReminder({ id: r.id, snoozedUntil: Date.now() + SNOOZE_MIN * 60000 });
+    snackbar(`Recordatorio pospuesto ${SNOOZE_MIN} minutos`);
+    return;
+  }
+  // Tocar la notificación: abrir la nota (cuando la lista ya esté cargada)
+  if (noteId) {
+    if (state.notes.some((n) => n.id === noteId)) openNote(noteId);
+    else pendingOpenNote = noteId;
+  }
+}
+
+async function completeReminder(r) {
+  if (r.repeat) {
+    state.repo.saveReminder({ id: r.id, snoozedUntil: null });
+    snackbar('Listo. Vuelve a sonar en la próxima repetición');
+  } else {
+    state.repo.saveReminder({ id: r.id, done: true, snoozedUntil: null });
+    if (r.itemId) await tickCasilla(r.noteId, r.itemId);
+    snackbar(r.itemId ? 'Casilla tildada y recordatorio completado' : 'Recordatorio completado');
+  }
+}
+
+// Tilda la casilla de un recordatorio "Hecho", aunque la nota no esté abierta
+async function tickCasilla(noteId, itemId) {
+  if (state.current?.id === noteId && editor) { checkTaskItem(editor, itemId); return; }
+  const s = state.repo.session(noteId, () => {});
+  try {
+    await s.ready();
+    const walk = (el) => {
+      for (const ch of el.toArray()) {
+        if (typeof ch.getAttribute !== 'function') continue;
+        if (ch.nodeName === 'taskItem' && ch.getAttribute('id') === itemId) { ch.setAttribute('checked', true); return true; }
+        if (walk(ch)) return true;
+      }
+      return false;
+    };
+    s.ydoc.transact(() => walk(s.fragment));
+    s.flush();
+  } finally { setTimeout(() => s.destroy(), 1500); }
+}
+
+// Al tildar en el editor una casilla con recordatorio, el recordatorio se completa
+let casillaTimer;
+function checkCasillaReminders() {
+  clearTimeout(casillaTimer);
+  casillaTimer = setTimeout(() => {
+    const c = state.current;
+    if (!c || !editor) return;
+    const items = taskItems(editor);
+    activeReminders(c.id).filter((r) => r.itemId && !r.repeat).forEach((r) => {
+      if (items.get(r.itemId)?.checked) state.repo.saveReminder({ id: r.id, done: true });
+    });
+  }, 800);
+}
+
+function removeNoteReminders(noteId) {
+  state.reminders.filter((r) => r.noteId === noteId).forEach((r) => state.repo.deleteReminder(r.id));
+}
+
+// Lista de recordatorios de la nota
+function openReminderSheet(noteId) {
+  const list = state.reminders.filter((r) => r.noteId === noteId && !r.done)
+    .map((r) => ({ r, t: nextOccurrence(r) })).sort((a, b) => a.t - b.t);
+  const repName = (k) => REPEATS.find(([v]) => v === k)?.[1] || '';
+  const now = Date.now();
+  openSheet(`<h2 class="sheet-title">Recordatorios</h2>
+    ${list.length ? '' : '<p class="sheet-text">Esta nota no tiene recordatorios.</p>'}
+    <div class="picker-list">${list.map(({ r, t }) => `
+      <div class="rem-row${!r.repeat && t < now ? ' overdue' : ''}">
+        ${icon(r.repeat ? 'repeat' : 'bell')}
+        <div class="rem-text"><strong>${esc(formatWhen(t))}</strong>
+          <small>${[r.repeat ? repName(r.repeat) : '', r.itemId ? `Casilla «${esc(r.itemText || '')}»` : 'Toda la nota'].filter(Boolean).join(' · ')}</small></div>
+        <button class="icon-btn small ripple" data-done="${esc(r.id)}" aria-label="Marcar como hecho">${icon('check')}</button>
+        <button class="icon-btn small ripple" data-edit="${esc(r.id)}" aria-label="Editar">${icon('edit')}</button>
+        <button class="icon-btn small ripple" data-del="${esc(r.id)}" aria-label="Eliminar">${icon('close')}</button>
+      </div>`).join('')}</div>
+    <div class="sheet-actions"><span class="spacer"></span><button class="filled-btn ripple" id="rem-add">${icon('bell')}<span>Agregar recordatorio</span></button></div>`, (body) => {
+    body.querySelector('#rem-add').addEventListener('click', () => { closeOverlays(); setTimeout(() => openReminderForm(noteId), 150); });
+    body.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => {
+      const r = state.reminders.find((x) => x.id === b.dataset.edit);
+      closeOverlays(); setTimeout(() => openReminderForm(noteId, r), 150);
+    }));
+    body.querySelectorAll('[data-done]').forEach((b) => b.addEventListener('click', async () => {
+      const r = state.reminders.find((x) => x.id === b.dataset.done);
+      closeOverlays(); if (r) await completeReminder(r);
+    }));
+    body.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', () => {
+      state.repo.deleteReminder(b.dataset.del);
+      closeOverlays();
+      snackbar('Recordatorio eliminado');
+    }));
+  });
+}
+
+const pad = (n) => String(n).padStart(2, '0');
+const dateValue = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const timeValue = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+// Formulario: fecha, hora, repetición; para toda la nota o para la casilla del cursor
+function openReminderForm(noteId, existing = null) {
+  const casilla = existing?.itemId
+    ? { id: existing.itemId, text: existing.itemText }
+    : (state.current?.id === noteId && editor ? currentTaskItem(editor) : null);
+  const base = existing ? new Date(nextOccurrence(existing)) : (() => { const d = new Date(Date.now() + 3600000); d.setMinutes(0, 0, 0); return d; })();
+  const quick = [];
+  const now = new Date();
+  if (now.getHours() < 17) { const d = new Date(); d.setHours(18, 0, 0, 0); quick.push(['Hoy 18:00', d]); }
+  { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); quick.push(['Mañana 9:00', d]); }
+  { const d = new Date(); d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7)); d.setHours(9, 0, 0, 0); quick.push(['Lunes 9:00', d]); }
+  { const d = new Date(Date.now() + 3600000); quick.push(['En 1 hora', d]); }
+
+  openSheet(`<h2 class="sheet-title">${existing ? 'Editar recordatorio' : 'Nuevo recordatorio'}</h2>
+    ${casilla ? `<div class="picker-list rem-target">
+      <button class="picker-item ripple" data-target="note"><span class="radio${existing && !existing.itemId ? ' on' : ''}"></span><span>Toda la nota</span></button>
+      <button class="picker-item ripple" data-target="item"><span class="radio${!existing || existing.itemId ? ' on' : ''}"></span><span>Casilla «${esc(casilla.text || 'sin texto')}»</span></button>
+    </div>` : ''}
+    <div class="chips-row rem-quick">${quick.map(([label], i) => `<button class="chip ripple" data-quick="${i}">${label}</button>`).join('')}</div>
+    <div class="rem-fields">
+      <label class="field"><span>Fecha</span><input type="date" id="rem-date" value="${dateValue(base)}"></label>
+      <label class="field"><span>Hora</span><input type="time" id="rem-time" value="${timeValue(base)}"></label>
+    </div>
+    <label class="field"><span>Repetición</span><select id="rem-repeat">${REPEATS.map(([v, label]) => `<option value="${v || ''}"${(existing?.repeat || null) === v ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
+    <div class="sheet-actions"><span class="spacer"></span>
+      <button class="text-btn ripple" id="rem-cancel">Cancelar</button>
+      <button class="filled-btn ripple" id="rem-save">Guardar</button></div>`, (body) => {
+    let target = casilla && (!existing || existing.itemId) ? 'item' : 'note';
+    body.querySelectorAll('[data-target]').forEach((b) => b.addEventListener('click', () => {
+      target = b.dataset.target;
+      body.querySelectorAll('[data-target] .radio').forEach((x) => x.classList.toggle('on', x.parentElement === b));
+    }));
+    body.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => {
+      const d = quick[Number(b.dataset.quick)][1];
+      body.querySelector('#rem-date').value = dateValue(d);
+      body.querySelector('#rem-time').value = timeValue(d);
+    }));
+    body.querySelector('#rem-cancel').addEventListener('click', closeOverlays);
+    body.querySelector('#rem-save').addEventListener('click', async () => {
+      const date = body.querySelector('#rem-date').value;
+      const time = body.querySelector('#rem-time').value;
+      const repeat = body.querySelector('#rem-repeat').value || null;
+      const at = new Date(`${date}T${time || '09:00'}`).getTime();
+      if (!date || Number.isNaN(at)) { snackbar('Elegí la fecha y la hora'); return; }
+      if (!repeat && at <= Date.now()) { snackbar('Elegí una fecha y hora futuras'); return; }
+      closeOverlays();
+      await saveReminder({
+        id: existing?.id || orgId(), noteId, at, repeat, done: false, snoozedUntil: null,
+        itemId: target === 'item' && casilla ? casilla.id : null,
+        itemText: target === 'item' && casilla ? (casilla.text || '') : null,
+        created: existing?.created || Date.now(),
+      });
+    });
+  });
+}
+
+async function saveReminder(r) {
+  if (isNative) {
+    const ok = await ensureNativePermissions(async () => {
+      if (localStorage.getItem('notas-pidio-alarmas')) return false;
+      localStorage.setItem('notas-pidio-alarmas', '1');
+      const res = await openDialog({
+        title: 'Permitir alarmas exactas',
+        text: 'Para que los recordatorios suenen a la hora justa, Android necesita el permiso «Alarmas y recordatorios». Se abre la configuración: activalo y volvé a la app.',
+        ok: 'Abrir configuración',
+      });
+      return !!res;
+    });
+    if (!ok) snackbar('Sin permiso de notificaciones: el recordatorio se guarda, pero no va a sonar');
+  } else {
+    const ok = await askWebNotifications();
+    if (!ok) snackbar('En la web el aviso aparece solo con la página abierta');
+  }
+  state.repo.saveReminder(r);
+  snackbar(`Recordatorio: ${formatWhen(nextOccurrence(r))}${r.itemId ? ` · «${r.itemText || 'casilla'}»` : ''}`);
+}
+
 /* ---------- Inicio ---------- */
 function init() {
   hydrateIcons();
@@ -1569,6 +1842,7 @@ function init() {
   requestPersistence();
   bindEditorUi();
   initNative({ onBack: goBack });
+  initNativeReminders(handleReminderAction);
 
   $('#fab').addEventListener('click', () => {
     if (!state.repo) return;

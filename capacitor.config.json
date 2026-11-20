@@ -20,6 +20,10 @@
       "providers": [
         "google.com"
       ]
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_notas",
+      "iconColor": "#6750A4"
     }
   }
 }
