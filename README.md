@@ -16,6 +16,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | 1A | v0.0.7 | Carpetas con subcarpetas, nota en varias carpetas, etiquetas con color, archivo, papelera con plazo, selección múltiple, copiar |
 | 1B | v0.0.8 | Búsqueda con filtros, orden por criterios y manual (arrastrar), vista lista/cuadrícula, plantillas |
 | 2 | v0.0.9 | Recordatorios por nota y por casilla, con repetición; notificaciones en Android con «Hecho» y «Posponer» |
+| 3 | v0.0.10 | Compartir por email (puede editar / solo puede ver), «Compartidas conmigo», edición simultánea, quitar acceso, salir de una nota |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
 
@@ -28,7 +29,8 @@ Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza 
   - `notes/{id}`: resumen compartido (dueño, miembros, título, vista previa, casillas, miniatura)
   - `notes/{id}/updates/*`: cambios de Yjs; se compactan cuando pasan de 40
   - `users/{uid}/meta/{id}`: organización personal (color, fijada, papelera)
-- Las reglas de seguridad están en `firestore.rules` (se pegan en la consola de Firebase).
+- Las reglas de seguridad están en `firestore.rules` (se pegan en la consola de Firebase cada vez que cambian).
+- Compartir: `invites/{idNota}_{email}` guarda la invitación; al aceptarla, la persona se agrega a `memberIds` con el rol indicado.
 
 ## Cómo se publica
 

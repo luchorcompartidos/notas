@@ -36,6 +36,7 @@ const state = {
   search: { active: false, q: '', folder: null, label: null, color: null, checks: null, days: null, archived: false },
   layout: localStorage.getItem('notas-layout') || 'grid',
   reminders: [],
+  invites: [],
 };
 
 const SORTS = [['updated', 'Fecha de modificación'], ['created', 'Fecha de creación'], ['title', 'Título (A-Z)'], ['manual', 'Manual (arrastrar)']];
@@ -247,6 +248,7 @@ function matchesFilter(n, f = state.filter) {
   if (n.template && f.kind !== 'trash') return false;
   switch (f.kind) {
     case 'reminders': return !n.trashed && activeReminders(n.id).length > 0;
+    case 'shared': return !n.trashed && !n.archived && !!n.owner && n.owner !== state.user?.uid;
     case 'archive': return n.archived && !n.trashed;
     case 'trash': return n.trashed;
     case 'folder': return !n.trashed && !n.archived && (n.folders || []).includes(f.id);
@@ -259,6 +261,7 @@ function filterTitle(f = state.filter) {
   if (f.kind === 'archive') return 'Archivo';
   if (f.kind === 'templates') return 'Plantillas';
   if (f.kind === 'reminders') return 'Recordatorios';
+  if (f.kind === 'shared') return 'Compartidas conmigo';
   if (f.kind === 'trash') return 'Papelera';
   if (f.kind === 'folder') return folderPath(f.id) || 'Carpeta';
   if (f.kind === 'label') return labelById(f.id)?.name || 'Etiqueta';
@@ -359,7 +362,7 @@ function renderList() {
   fillGrid($('#grid-others'), others);
   $('#pinned-wrap').hidden = pinned.length === 0;
   $('#others-label').hidden = pinned.length === 0 || others.length === 0;
-  $('#fab').hidden = searching || ['archive', 'trash', 'reminders'].includes(f.kind);
+  $('#fab').hidden = searching || ['archive', 'trash', 'reminders', 'shared'].includes(f.kind);
   $('#btn-layout').innerHTML = icon(state.layout === 'list' ? 'viewGrid' : 'viewList');
   $('#btn-layout').setAttribute('aria-label', state.layout === 'list' ? 'Ver en cuadrícula' : 'Ver en lista');
 
@@ -393,6 +396,7 @@ function renderList() {
   const emptyTexts = {
     notes: 'Las notas que crees aparecen acá', archive: 'Las notas archivadas aparecen acá',
     trash: 'No hay notas en la papelera', folder: 'Esta carpeta no tiene notas', label: 'No hay notas con esta etiqueta',
+    shared: 'Cuando alguien te comparta una nota y la aceptes, aparece acá.',
     reminders: 'No hay recordatorios pendientes. Para crear uno, abrí una nota y tocá la campana.',
     templates: 'Todavía no hay plantillas. Creá una con el botón +, o desde una nota: menú ⋮ → «Guardar como plantilla».',
   };
@@ -440,9 +444,17 @@ function cardEl(n) {
   const labels = noteLabels(n);
   const folders = noteFolders(n);
   const next = n.trashed ? null : nextOf(n.id);
-  if (labels.length || folders.length || next) {
+  const shared = isShared(n);
+  if (labels.length || folders.length || next || shared) {
     const row = document.createElement('div');
     row.className = 'card-chips';
+    if (shared) {
+      const sc = document.createElement('span');
+      sc.className = 'mini-chip';
+      sc.title = n.owner === state.user?.uid ? 'La compartiste' : 'Compartida con vos';
+      sc.innerHTML = `${icon('people')}<span>${n.memberIds.length}</span>`;
+      row.appendChild(sc);
+    }
     if (next) {
       const overdue = !next.r.repeat && next.t < Date.now();
       const b = document.createElement('button');
@@ -511,16 +523,22 @@ function paintEditorChrome() {
   $('#btn-pin').classList.toggle('active', !!c.pinned);
   $('#btn-pin').setAttribute('aria-label', c.pinned ? 'Dejar de fijar' : 'Fijar nota');
 
-  // Papelera: solo lectura, con opción de restaurar
+  // Papelera o "solo puede ver": solo lectura
   const trashed = !!c.trashed;
-  $('#trash-banner').hidden = !trashed;
-  $('#toolbar').hidden = trashed;
+  const viewOnly = myRole(noteById(c.id) || c) === 'view';
+  const readOnly = trashed || viewOnly;
+  $('#trash-banner').hidden = !readOnly;
+  $('#banner-text').textContent = trashed ? 'Esta nota está en la papelera.' : 'Solo lectura: te compartieron esta nota para ver.';
+  $('#btn-restore').hidden = !trashed;
+  $('#toolbar').hidden = readOnly;
+  $('#btn-share').hidden = trashed;
+  $('#btn-share').classList.toggle('active', isShared(noteById(c.id)));
   $('#btn-pin').hidden = trashed;
   $('#btn-reminder').hidden = trashed;
   $('#btn-reminder').classList.toggle('active', activeReminders(c.id).length > 0);
   $('#btn-color').hidden = trashed;
-  $('#note-title').readOnly = trashed;
-  if (editor && editor.isEditable === trashed) editor.setEditable(!trashed);
+  $('#note-title').readOnly = readOnly;
+  if (editor && editor.isEditable === readOnly) editor.setEditable(!readOnly);
 
   // Carpetas y etiquetas de la nota
   const fs = noteFolders(c);
@@ -593,7 +611,7 @@ async function openNote(id, { push = true, isNew = false, meta = {} } = {}) {
       }
     },
   });
-  if (c.trashed) editor.setEditable(false);
+  if (c.trashed || myRole(noteById(c.id)) === 'view') editor.setEditable(false);
   updateToolbar(editor);
 }
 
@@ -718,6 +736,8 @@ function bindEditorUi() {
 
   $('#btn-back').addEventListener('click', goBack);
   $('#btn-reminder').addEventListener('click', () => openReminderSheet(state.current.id));
+  $('#btn-share').addEventListener('click', () => openShareSheet(state.current.id));
+  $('#invites-action').addEventListener('click', showInvites);
 
   $('#btn-pin').addEventListener('click', () => {
     const c = state.current;
@@ -743,6 +763,7 @@ function bindEditorUi() {
       { label: 'Restaurar', onClick: () => { restoreNotes([c.id]); c.trashed = false; paintEditorChrome(); } },
       { label: 'Eliminar definitivamente', onClick: async () => { const id = c.id; if (await deleteForever([id])) goBack(); } },
     ] : [
+      { label: 'Compartir…', onClick: () => openShareSheet(c.id) },
       { label: 'Carpetas…', onClick: () => openPicker([c.id], 'folders') },
       { label: 'Etiquetas…', onClick: () => openPicker([c.id], 'labels') },
       ...(noteFolders(c).length ? [{ label: 'Ver en qué carpetas está', onClick: () => showOccurrences(c.id) }] : []),
@@ -809,7 +830,7 @@ function showVersion() {
   const r = state.release;
   openSheet(`
     <h2 class="sheet-title">Notas v${esc(APP_VERSION)}</h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 2: recordatorios</p>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 3: compartir</p>
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);
@@ -853,6 +874,7 @@ function startRepo(repo, mode) {
   repo.subscribe(onList);
   repo.subscribeOrg(onOrg);
   repo.subscribeReminders(onReminders);
+  repo.subscribeInvites(onInvites);
   updateSyncIcon();
   setView('list');
 }
@@ -861,7 +883,7 @@ function startCloud(user) {
   if (state.mode === 'cloud' && state.user?.uid === user.uid) return;
   state.user = user;
   localStorage.setItem('notas-mode', 'cloud');
-  startRepo(new CloudRepo(fb().db, user.uid), 'cloud');
+  startRepo(new CloudRepo(fb().db, user.uid, { name: user.displayName, email: user.email }), 'cloud');
 }
 
 function startLocal() {
@@ -1040,6 +1062,8 @@ function renderDrawer() {
     <div class="drawer-section"><span>Etiquetas</span><button class="icon-btn small ripple" id="drawer-new-label" aria-label="Nueva etiqueta">${icon('add')}</button></div>
     ${labels.join('') || '<p class="drawer-empty">Todavía no hay etiquetas</p>'}
     <div class="drawer-divider"></div>
+    ${state.mode === 'cloud' ? item('shared', null, icon('people'), `Compartidas conmigo (${state.notes.filter((n) => !n.trashed && n.owner && n.owner !== state.user?.uid).length})`) : ''}
+    ${state.invites.length ? `<div class="drawer-item"><button class="drawer-link ripple" id="drawer-invites">${icon('mail')}<span class="drawer-label">Invitaciones (${state.invites.length})</span></button></div>` : ''}
     ${item('reminders', null, icon('bell'), `Recordatorios (${state.notes.filter((n) => !n.trashed && activeReminders(n.id).length).length})`)}
     ${item('templates', null, icon('template'), `Plantillas (${count((n) => n.template && !n.trashed)})`)}
     ${item('archive', null, icon('archive'), `Archivo (${count((n) => n.archived && !n.trashed && !n.template)})`)}
@@ -1057,6 +1081,7 @@ function renderDrawer() {
     renderDrawer();
   }));
   $('#drawer-new-folder').addEventListener('click', () => newFolder(null));
+  $('#drawer-invites')?.addEventListener('click', () => { closeOverlays(); showInvites(); });
   $('#drawer-new-label').addEventListener('click', () => newLabel());
   $('#drawer-settings').addEventListener('click', () => { closeOverlays(); showTrashSettings(); });
 }
@@ -1244,12 +1269,18 @@ function restoreNotes(ids) {
 async function deleteForever(ids) {
   const r = await openDialog({
     title: ids.length > 1 ? `¿Eliminar definitivamente ${ids.length} notas?` : '¿Eliminar definitivamente la nota?',
-    text: 'No se puede deshacer.', ok: 'Eliminar', danger: true,
+    text: ids.some((id) => isShared(noteById(id)) && noteById(id)?.owner === state.user?.uid)
+      ? 'No se puede deshacer. Las notas que compartiste se borran también para las personas con acceso.'
+      : 'No se puede deshacer.',
+    ok: 'Eliminar', danger: true,
   });
   if (!r) return false;
   ids.forEach((id) => {
     const n = noteById(id);
-    if (n && state.repo.canPurge(n)) { state.repo.removeCompletely(id); removeNoteReminders(id); }
+    if (!n) return;
+    if (state.repo.canPurge(n)) state.repo.removeCompletely(id);
+    else state.repo.leaveNote(id); // compartida por otro: se sale de la nota, no se borra para los demás
+    removeNoteReminders(id);
   });
   snackbar(ids.length > 1 ? 'Notas eliminadas' : 'Nota eliminada');
   return true;
@@ -1391,7 +1422,10 @@ function maybePurge() {
   const now = Date.now();
   state.notes.filter((n) => n.trashed).forEach((n) => {
     if (!n.trashedAt) { state.repo.setMeta(n.id, { trashedAt: now }); return; } // empieza a contar el plazo
-    if (days > 0 && now - n.trashedAt > days * 86400000 && state.repo.canPurge(n)) { state.repo.removeCompletely(n.id); removeNoteReminders(n.id); }
+    if (days > 0 && now - n.trashedAt > days * 86400000) {
+      if (state.repo.canPurge(n)) state.repo.removeCompletely(n.id); else state.repo.leaveNote(n.id);
+      removeNoteReminders(n.id);
+    }
   });
 }
 
@@ -1833,6 +1867,148 @@ async function saveReminder(r) {
   }
   state.repo.saveReminder(r);
   snackbar(`Recordatorio: ${formatWhen(nextOccurrence(r))}${r.itemId ? ` · «${r.itemText || 'casilla'}»` : ''}`);
+}
+
+/* ---------- Fase 3: compartir y multiusuario ---------- */
+const isShared = (n) => (n?.memberIds?.length || 0) > 1;
+const myRole = (n) => state.repo?.roleOf(n) || 'owner';
+const ROLE_NAMES = { owner: 'Dueño', edit: 'Puede editar', view: 'Solo puede ver' };
+
+function onInvites(list) {
+  state.invites = list;
+  const b = $('#invites-banner');
+  b.hidden = !list.length || state.mode !== 'cloud';
+  if (list.length) {
+    $('#invites-text').textContent = list.length === 1
+      ? `${list[0].fromName || list[0].fromEmail} te compartió una nota`
+      : `Tenés ${list.length} notas compartidas para aceptar`;
+  }
+  renderDrawer();
+}
+
+function showInvites() {
+  const list = state.invites;
+  openSheet(`<h2 class="sheet-title">Notas compartidas con vos</h2>
+    ${list.length ? '' : '<p class="sheet-text">No hay invitaciones pendientes.</p>'}
+    <div class="picker-list">${list.map((i) => `
+      <div class="rem-row">
+        ${icon('people')}
+        <div class="rem-text"><strong>${esc(i.noteTitle || 'Nota sin título')}</strong>
+          <small>${esc(i.fromName || '')} ${i.fromEmail ? `(${esc(i.fromEmail)})` : ''} · ${ROLE_NAMES[i.role] || ''}</small></div>
+        <button class="text-btn ripple" data-decline="${esc(i.id)}">Rechazar</button>
+        <button class="filled-btn ripple" data-accept="${esc(i.id)}">Aceptar</button>
+      </div>`).join('')}</div>`, (body) => {
+    body.querySelectorAll('[data-accept]').forEach((b) => b.addEventListener('click', async () => {
+      const inv = state.invites.find((x) => x.id === b.dataset.accept);
+      b.disabled = true;
+      try {
+        await state.repo.acceptInvite(inv);
+        closeOverlays();
+        snackbar('Nota agregada a «Compartidas conmigo»', 'Abrir', () => openNote(inv.noteId));
+      } catch (e) {
+        b.disabled = false;
+        snackbar(`No se pudo aceptar (${e?.code || 'error'}). ¿Ya se publicaron las reglas nuevas?`);
+      }
+    }));
+    body.querySelectorAll('[data-decline]').forEach((b) => b.addEventListener('click', async () => {
+      const inv = state.invites.find((x) => x.id === b.dataset.decline);
+      await state.repo.declineInvite(inv);
+      closeOverlays();
+      snackbar('Invitación rechazada');
+    }));
+  });
+}
+
+// Hoja "Compartir": miembros, permisos, invitaciones pendientes e invitar por email
+let unwatchInvites = null;
+function openShareSheet(noteId) {
+  if (!state.repo.canShare) {
+    openSheet(`<h2 class="sheet-title">Compartir</h2>
+      <p class="sheet-text">Para compartir notas hace falta iniciar sesión con Google: sin cuenta, las notas quedan solo en este dispositivo.</p>`);
+    return;
+  }
+  const n = noteById(noteId);
+  if (!n) return;
+  const role = myRole(n);
+  const owner = role === 'owner';
+  let pending = [];
+  const draw = (body) => {
+    const note = noteById(noteId) || n;
+    const members = (note.memberIds || []).map((uid) => ({
+      uid, ...(note.members?.[uid] || {}),
+      role: uid === note.owner ? 'owner' : (note.roles?.[uid] || 'edit'),
+      me: uid === state.user?.uid,
+    }));
+    body.querySelector('.share-members').innerHTML = members.map((m) => `
+      <div class="rem-row">
+        <span class="avatar">${esc((m.name || m.email || '?').slice(0, 1).toUpperCase())}</span>
+        <div class="rem-text"><strong>${esc(m.me ? `${m.name || 'Vos'} (vos)` : (m.name || m.email || 'Miembro'))}</strong><small>${esc(m.email || '')}</small></div>
+        ${owner && m.role !== 'owner'
+          ? `<select class="role-select" data-role-uid="${esc(m.uid)}"><option value="edit"${m.role === 'edit' ? ' selected' : ''}>Puede editar</option><option value="view"${m.role === 'view' ? ' selected' : ''}>Solo puede ver</option></select>
+             <button class="icon-btn small ripple" data-remove="${esc(m.uid)}" aria-label="Quitar acceso">${icon('close')}</button>`
+          : `<span class="role-label">${ROLE_NAMES[m.role]}</span>`}
+      </div>`).join('') + pending.map((p) => `
+      <div class="rem-row pending">
+        <span class="avatar">${icon('mail')}</span>
+        <div class="rem-text"><strong>${esc(p.email)}</strong><small>Invitación pendiente · ${ROLE_NAMES[p.role]}</small></div>
+        <button class="icon-btn small ripple" data-cancel="${esc(p.id)}" aria-label="Cancelar invitación">${icon('close')}</button>
+      </div>`).join('');
+    body.querySelectorAll('[data-role-uid]').forEach((sel) => sel.addEventListener('change', () => {
+      state.repo.setRole(noteId, sel.dataset.roleUid, sel.value);
+      snackbar('Permiso actualizado');
+    }));
+    body.querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
+      const r = await openDialog({ title: '¿Quitar el acceso?', text: 'Esa persona deja de ver la nota.', ok: 'Quitar', danger: true });
+      if (r) { state.repo.removeMember(noteId, b.dataset.remove); snackbar('Acceso quitado'); }
+    }));
+    body.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => {
+      state.repo.cancelInvite(b.dataset.cancel);
+      snackbar('Invitación cancelada');
+    }));
+  };
+
+  openSheet(`<h2 class="sheet-title">Compartir</h2>
+    <div class="picker-list share-members"></div>
+    ${owner ? `
+      <div class="share-form">
+        <label class="field"><span>Invitar por email (cuenta de Google)</span>
+          <input type="email" id="share-email" placeholder="nombre@gmail.com" autocomplete="email" inputmode="email"></label>
+        <label class="field"><span>Permiso</span>
+          <select id="share-role"><option value="edit">Puede editar</option><option value="view">Solo puede ver</option></select></label>
+      </div>
+      <p class="sheet-text">La persona ve la invitación al abrir Notas con esa cuenta. Avisale para que la acepte.</p>
+      <div class="sheet-actions"><span class="spacer"></span><button class="filled-btn ripple" id="share-send">${icon('personAdd')}<span>Invitar</span></button></div>`
+    : `<p class="sheet-text">Tu permiso: ${ROLE_NAMES[role]}. Solo el dueño puede invitar o cambiar permisos.</p>
+      <div class="sheet-actions"><span class="spacer"></span><button class="text-btn danger ripple" id="share-leave">Salir de esta nota</button></div>`}`, (body) => {
+    draw(body);
+    if (owner) {
+      unwatchInvites?.();
+      unwatchInvites = state.repo.watchNoteInvites(noteId, (list) => {
+        pending = list.filter((i) => i.status === 'pending');
+        if ($('#sheet').classList.contains('open')) draw(body);
+      });
+      body.querySelector('#share-send').addEventListener('click', async () => {
+        const email = body.querySelector('#share-email').value.trim().toLowerCase();
+        const r = body.querySelector('#share-role').value;
+        if (!/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(email)) { snackbar('Escribí un email válido'); return; }
+        if (email === state.repo.profile.email) { snackbar('Esa es tu propia cuenta'); return; }
+        try {
+          await state.repo.invite(noteById(noteId) || n, email, r);
+          body.querySelector('#share-email').value = '';
+          snackbar(`Invitación enviada a ${email}`);
+        } catch (e) { snackbar(`No se pudo invitar (${e?.code || 'error'})`); }
+      });
+    } else {
+      body.querySelector('#share-leave').addEventListener('click', async () => {
+        const ok = await openDialog({ title: '¿Salir de esta nota?', text: 'Deja de aparecer en tus notas. Para volver, el dueño te tiene que invitar de nuevo.', ok: 'Salir', danger: true });
+        if (!ok) return;
+        closeOverlays();
+        if (state.current?.id === noteId) goBack();
+        await state.repo.leaveNote(noteId);
+        snackbar('Saliste de la nota');
+      });
+    }
+  });
 }
 
 /* ---------- Inicio ---------- */

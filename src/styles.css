@@ -446,3 +446,21 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
   -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z'/></svg>") center / contain no-repeat;
   mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z'/></svg>") center / contain no-repeat;
 }
+
+/* ===== Fase 3: compartir ===== */
+.avatar {
+  width: 36px; height: 36px; border-radius: 50%; flex: 0 0 auto; display: grid; place-items: center;
+  background: var(--primary-container); color: var(--on-primary-container); font-weight: 500;
+}
+.avatar svg { width: 18px; height: 18px; color: inherit !important; }
+.rem-row.pending .avatar { background: var(--surface-container-high); color: var(--on-surface-variant); }
+.role-label { font-size: 12px; color: var(--on-surface-variant); flex: 0 0 auto; }
+.role-select {
+  height: 36px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--outline-variant); background: transparent;
+  color: var(--on-surface); font: inherit; font-size: 13px; max-width: 140px;
+}
+.role-select option { background: var(--surface-container-high); color: var(--on-surface); }
+.share-form { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 0 12px; }
+.share-form .field:first-child { flex: 2 1 220px; }
+.share-form .field:last-child { flex: 1 1 140px; }
+.rem-row .filled-btn { min-height: 36px; padding: 0 14px; font-size: 13px; }

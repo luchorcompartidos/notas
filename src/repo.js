@@ -9,10 +9,12 @@
  *   users/{uid}/labels/*  → etiquetas (nombre y color)
  *   users/{uid}/settings/prefs → preferencias (plazo de la papelera, orden)
  *   users/{uid}/reminders/* → recordatorios (por nota o por casilla), de cada usuario
+ *   invites/{noteId}_{email} → invitaciones para compartir una nota (rol: edit | view)
  * LocalRepo (sin cuenta): todo en este dispositivo (IndexedDB).
  */
 import {
   collection, doc, query, where, onSnapshot, setDoc, updateDoc, getDocs, writeBatch, deleteDoc,
+  arrayUnion, arrayRemove, deleteField,
 } from 'firebase/firestore';
 import { NoteSession } from './sync.js';
 import { store, newId } from './store.js';
@@ -25,9 +27,11 @@ const META_DEFAULTS = {
 export const orgId = () => newId();
 
 export class CloudRepo {
-  constructor(db, uid) {
+  constructor(db, uid, profile = {}) {
     this.db = db;
     this.uid = uid;
+    this.profile = { name: profile.name || '', email: (profile.email || '').toLowerCase() };
+    this.canShare = true;
     this.notes = new Map();
     this.meta = new Map();
     this.pending = 0;
@@ -90,6 +94,64 @@ export class CloudRepo {
     this.unsubRem = onSnapshot(collection(this.db, 'users', this.uid, 'reminders'), (s) => {
       cb(s.docs.map((d) => ({ id: d.id, ...d.data() })));
     }, (err) => { this.error = err; this.onChange(); });
+  }
+
+  /* ---------- Compartir ---------- */
+  me() { return { name: this.profile.name, email: this.profile.email }; }
+
+  subscribeInvites(cb) {
+    if (!this.profile.email) { cb([]); return; }
+    this.unsubInv = onSnapshot(query(collection(this.db, 'invites'), where('email', '==', this.profile.email)), (s) => {
+      cb(s.docs.map((d) => ({ id: d.id, ...d.data() })).filter((i) => i.status === 'pending'));
+    }, (err) => console.warn('Invitaciones', err));
+  }
+
+  watchNoteInvites(noteId, cb) {
+    return onSnapshot(query(collection(this.db, 'invites'), where('noteId', '==', noteId), where('from', '==', this.uid)),
+      (s) => cb(s.docs.map((d) => ({ id: d.id, ...d.data() }))), () => cb([]));
+  }
+
+  async invite(note, email, role) {
+    const e = email.trim().toLowerCase();
+    const ref = doc(this.db, 'notes', note.id);
+    // El dueño queda registrado como miembro con nombre y email (para que lo vean los demás)
+    if (!note.members?.[this.uid]) {
+      await this.track(updateDoc(ref, { [`members.${this.uid}`]: this.me(), [`roles.${this.uid}`]: 'owner' }));
+    }
+    await this.track(setDoc(doc(this.db, 'invites', `${note.id}_${e}`), {
+      noteId: note.id, email: e, role, from: this.uid, fromName: this.profile.name, fromEmail: this.profile.email,
+      noteTitle: note.title || note.preview?.slice(0, 60) || '', status: 'pending', created: Date.now(),
+    }));
+  }
+
+  cancelInvite(id) { return this.track(deleteDoc(doc(this.db, 'invites', id))); }
+
+  async acceptInvite(inv) {
+    await updateDoc(doc(this.db, 'notes', inv.noteId), {
+      memberIds: arrayUnion(this.uid), [`roles.${this.uid}`]: inv.role, [`members.${this.uid}`]: this.me(),
+    });
+    await deleteDoc(doc(this.db, 'invites', inv.id));
+  }
+
+  declineInvite(inv) { return this.track(deleteDoc(doc(this.db, 'invites', inv.id))); }
+
+  setRole(noteId, uid, role) { return this.track(updateDoc(doc(this.db, 'notes', noteId), { [`roles.${uid}`]: role })); }
+
+  removeMember(noteId, uid) {
+    return this.track(updateDoc(doc(this.db, 'notes', noteId), {
+      memberIds: arrayRemove(uid), [`roles.${uid}`]: deleteField(), [`members.${uid}`]: deleteField(),
+    }));
+  }
+
+  async leaveNote(noteId) {
+    await this.removeMember(noteId, this.uid);
+    this.track(deleteDoc(doc(this.db, 'users', this.uid, 'meta', noteId)));
+  }
+
+  roleOf(note) {
+    if (!note) return 'owner';
+    if (note.owner === this.uid) return 'owner';
+    return note.roles?.[this.uid] || 'edit';
   }
 
   saveReminder({ id, ...data }) { this.track(setDoc(doc(this.db, 'users', this.uid, 'reminders', id), data, { merge: true })); }
@@ -218,6 +280,10 @@ export class LocalRepo {
   deleteLabel(id) { delete this.org.labels[id]; this.emitOrg(); }
   saveSettings(patch) { Object.assign(this.org.settings, patch); this.emitOrg(); }
   canPurge() { return true; }
+
+  get canShare() { return false; }
+  roleOf() { return 'owner'; }
+  subscribeInvites(cb) { cb([]); }
 
   loadReminders() {
     try { return JSON.parse(localStorage.getItem('notas-recordatorios')) || {}; } catch { return {}; }

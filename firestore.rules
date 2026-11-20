@@ -1,6 +1,6 @@
 rules_version = '2';
 
-// Reglas de seguridad de Firestore para Notas.
+// Reglas de seguridad de Firestore para Notas (v0.0.10: notas compartidas).
 // Se pegan en Firebase → Firestore Database → Reglas → Publicar.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -9,12 +9,34 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function myEmail() {
+      return request.auth.token.email.lower();
+    }
+
     function isMember(data) {
       return signedIn() && request.auth.uid in data.memberIds;
     }
 
+    function isOwner(data) {
+      return signedIn() && data.owner == request.auth.uid;
+    }
+
+    // Dueño, o miembro con permiso de edición
+    function canEdit(data) {
+      return isOwner(data)
+        || (isMember(data) && data.get('roles', {}).get(request.auth.uid, 'edit') == 'edit');
+    }
+
     function noteData(noteId) {
       return get(/databases/$(database)/documents/notes/$(noteId)).data;
+    }
+
+    function changed() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    function inviteFor(noteId) {
+      return /databases/$(database)/documents/invites/$(noteId + '_' + myEmail());
     }
 
     // Resumen de la nota (contenido compartido). Solo lo ven sus miembros.
@@ -26,25 +48,48 @@ service cloud.firestore {
         && request.resource.data.owner == request.auth.uid
         && request.resource.data.memberIds == [request.auth.uid];
 
-      // Los miembros pueden editar el resumen, pero no cambiar dueño ni miembros
-      // (compartir llega en una versión posterior).
-      allow update: if isMember(resource.data)
-        && request.resource.data.owner == resource.data.owner
-        && request.resource.data.memberIds == resource.data.memberIds;
+      allow update: if
+        // El dueño: todo menos cambiar de dueño
+        (isOwner(resource.data) && request.resource.data.owner == resource.data.owner)
+        // Quien puede editar: el contenido, no los miembros ni los permisos
+        || (canEdit(resource.data) && !changed().hasAny(['owner', 'memberIds', 'roles', 'members']))
+        // Un miembro que sale de la nota
+        || (isMember(resource.data)
+            && changed().hasOnly(['memberIds', 'roles', 'members'])
+            && request.resource.data.memberIds == resource.data.memberIds.removeAll([request.auth.uid]))
+        // Quien acepta una invitación: se agrega a sí mismo con el permiso de la invitación
+        || (signedIn()
+            && !(request.auth.uid in resource.data.memberIds)
+            && exists(inviteFor(noteId))
+            && changed().hasOnly(['memberIds', 'roles', 'members'])
+            && request.resource.data.memberIds == resource.data.memberIds.concat([request.auth.uid])
+            && request.resource.data.roles.diff(resource.data.get('roles', {})).affectedKeys().hasOnly([request.auth.uid])
+            && request.resource.data.roles[request.auth.uid] == get(inviteFor(noteId)).data.role);
 
       // Solo el dueño puede borrarla del todo.
-      allow delete: if signedIn() && resource.data.owner == request.auth.uid;
+      allow delete: if isOwner(resource.data);
 
       // Cambios de Yjs (el contenido de la nota).
       match /updates/{updateId} {
-        allow read, delete: if isMember(noteData(noteId));
-        allow create: if isMember(noteData(noteId))
-          && request.resource.data.by == request.auth.uid;
+        allow read: if isMember(noteData(noteId));
+        allow create: if canEdit(noteData(noteId)) && request.resource.data.by == request.auth.uid;
+        allow delete: if canEdit(noteData(noteId));
         allow update: if false;
       }
     }
 
-    // Organización personal de cada usuario (color, fijada, papelera).
+    // Invitaciones para compartir: el id es "<idDeLaNota>_<email>"
+    match /invites/{inviteId} {
+      allow read: if signedIn() && (resource.data.email == myEmail() || resource.data.from == request.auth.uid);
+      allow create, update: if signedIn()
+        && request.resource.data.from == request.auth.uid
+        && noteData(request.resource.data.noteId).owner == request.auth.uid
+        && inviteId == request.resource.data.noteId + '_' + request.resource.data.email
+        && request.resource.data.role in ['edit', 'view'];
+      allow delete: if signedIn() && (resource.data.email == myEmail() || resource.data.from == request.auth.uid);
+    }
+
+    // Organización personal de cada usuario (color, carpetas, etiquetas, recordatorios, preferencias).
     match /users/{uid}/{document=**} {
       allow read, write: if signedIn() && request.auth.uid == uid;
     }

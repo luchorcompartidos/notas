@@ -49,6 +49,10 @@
         <span class="spacer"></span>
         <div id="select-actions" class="select-actions"></div>
       </header>
+      <div class="update-banner" id="invites-banner" hidden>
+        <span id="invites-text"></span>
+        <button class="text-btn ripple" id="invites-action">Ver</button>
+      </div>
       <div class="update-banner" id="update-banner" hidden>
         <span id="update-text">Hay una versión nueva.</span>
         <button class="text-btn ripple" id="update-action">Recargar</button>
@@ -77,6 +81,7 @@
       <header class="appbar" id="appbar-editor">
         <button class="icon-btn ripple" id="btn-back" aria-label="Volver" data-icon="back"></button>
         <span class="spacer"></span>
+        <button class="icon-btn ripple" id="btn-share" aria-label="Compartir" data-icon="personAdd"></button>
         <button class="icon-btn ripple" id="btn-reminder" aria-label="Recordatorios" data-icon="bell"></button>
         <button class="icon-btn ripple" id="btn-pin" aria-label="Fijar nota" data-icon="pin"></button>
         <button class="icon-btn ripple" id="btn-color" aria-label="Color de la nota" data-icon="palette"></button>
@@ -85,7 +90,7 @@
       <main class="scroll" id="editor-scroll">
         <div class="editor-wrap">
           <div class="trash-banner" id="trash-banner" hidden>
-            <span>Esta nota está en la papelera.</span>
+            <span id="banner-text">Esta nota está en la papelera.</span>
             <button class="text-btn ripple" id="btn-restore">Restaurar</button>
           </div>
           <input id="note-title" class="note-title" type="text" placeholder="Título"
