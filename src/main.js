@@ -42,7 +42,7 @@ const state = {
   selection: new Set(),
   expanded: new Set(JSON.parse(localStorage.getItem('notas-expanded') || '[]')),
   purged: false,
-  search: { active: false, q: '', folder: null, label: null, color: null, checks: null, days: null, archived: false },
+  search: { active: false, q: '', folder: null, label: null, color: null, checks: null, days: null, archived: false, noHidden: false },
   layout: localStorage.getItem('notas-layout') || 'grid',
   reminders: [],
   invites: [],
@@ -309,7 +309,8 @@ function matchesFilter(n, f = state.filter) {
     case 'trash': return n.trashed;
     case 'folder': return !n.trashed && !n.archived && (n.folders || []).includes(f.id);
     case 'label': return !n.trashed && !n.archived && (n.labels || []).includes(f.id);
-    default: return !n.trashed && !n.archived;
+    // Las notas ocultas solo faltan en la vista principal de Notas
+    default: return !n.trashed && !n.archived && !n.hidden;
   }
 }
 
@@ -344,7 +345,7 @@ function onList(list) {
     if (n) {
       Object.assign(c, {
         color: n.color, pinned: n.pinned, updated: n.updated, folders: n.folders || [], labels: n.labels || [],
-        archived: !!n.archived, trashed: !!n.trashed, updatedBy: n.updatedBy, updatedByName: n.updatedByName,
+        archived: !!n.archived, trashed: !!n.trashed, hidden: !!n.hidden, updatedBy: n.updatedBy, updatedByName: n.updatedByName,
       });
       paintEditorChrome();
     }
@@ -545,6 +546,15 @@ function cardEl(n) {
       row.appendChild(b);
     }
     el.appendChild(row);
+  }
+
+  // Marca [Oculta] a la derecha del título (o arriba del texto si no tiene título)
+  if (n.hidden && !n.trashed) {
+    const tag = document.createElement('span');
+    tag.className = 'hidden-tag'; tag.textContent = '[Oculta]'; tag.title = 'Oculta en la pantalla principal';
+    const t = el.querySelector('.card-title');
+    if (t) t.append(' ', tag);
+    else { const p = document.createElement('p'); p.className = 'card-title card-title-tag'; p.appendChild(tag); el.insertBefore(p, el.querySelector('.card-img')?.nextSibling || check.nextSibling); }
   }
 
   // Contenido de la tarjeta (se recorta en la vista estándar o compacta)
@@ -863,6 +873,10 @@ function bindEditorUi() {
       ...(noteFolders(c).length ? [{ label: 'Ver en qué carpetas está', onClick: () => showOccurrences(c.id) }] : []),
       { divider: true },
       { label: c.archived ? 'Desarchivar' : 'Archivar', onClick: () => { const id = c.id; const v = !c.archived; goBack(); archiveNotes([id], v); } },
+      ...(c.template ? [] : [noteById(c.id)?.hidden
+        ? { label: 'Mostrar en la pantalla principal', onClick: () => hideNotes([c.id], false) }
+        : { label: 'Ocultar de la pantalla principal', onClick: () => hideNotes([c.id], true) }]),
+      { label: 'Estadísticas e Info de la nota', onClick: () => showNoteStats(c.id) },
       { label: 'Historial de versiones', onClick: () => showVersions(c.id) },
       { label: 'Enviar… (a través de →)', onClick: () => openSendSheet([c.id]) },
       { label: 'Exportar y Descargar…', onClick: () => openExportSheet([c.id]) },
@@ -932,7 +946,7 @@ function showVersion() {
   const r = state.release;
   openSheet(`
     <h2 class="sheet-title">${BRAND} <small class="ver">v${esc(APP_VERSION)}</small></h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · marca ANote..., vista compacta, link y pedidos de acceso</p>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · notas ocultas y estadísticas de la nota</p>
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);
@@ -1181,6 +1195,7 @@ function renderDrawer() {
     ${state.invites.length ? `<div class="drawer-item"><button class="drawer-link ripple" id="drawer-invites">${icon('mail')}<span class="drawer-label">Invitaciones (${state.invites.length})</span></button></div>` : ''}
     ${item('reminders', null, icon('bell'), `Recordatorios (${state.notes.filter((n) => !n.trashed && activeReminders(n.id).length).length})`)}
     ${item('templates', null, icon('template'), `Plantillas (${count((n) => n.template && !n.trashed)})`)}
+    <div class="drawer-item"><button class="drawer-link ripple" id="drawer-hidden">${icon('visibilityOff')}<span class="drawer-label">Ocultas (${count((n) => n.hidden && !n.trashed && !n.template)})</span></button></div>
     ${item('archive', null, icon('archive'), `Archivo (${count((n) => n.archived && !n.trashed && !n.template)})`)}
     ${item('trash', null, icon('delete'), `Papelera (${count((n) => n.trashed)})`)}
     <div class="drawer-divider"></div>
@@ -1198,6 +1213,7 @@ function renderDrawer() {
   $('#drawer-new-folder').addEventListener('click', () => newFolder(null));
   $('#drawer-invites')?.addEventListener('click', () => { closeOverlays(); showInvites(); });
   $('#drawer-new-label').addEventListener('click', () => newLabel());
+  $('#drawer-hidden').addEventListener('click', () => { closeOverlays(); showHiddenManager(); });
   $('#drawer-settings').addEventListener('click', () => { closeOverlays(); showTrashSettings(); });
 }
 
@@ -1369,6 +1385,244 @@ function archiveNotes(ids, value) {
     'Deshacer', () => ids.forEach((id) => state.repo.setMeta(id, { archived: !value })));
 }
 
+// Ocultar = no aparece en la pantalla principal de Notas (es personal, como las carpetas)
+function hideNotes(ids, value, { quiet = false } = {}) {
+  ids.forEach((id) => {
+    const n = noteById(id); if (n) { n.hidden = value; n.unlisted = false; }
+    if (state.current?.id === id) state.current.hidden = value;
+    state.repo.setMeta(id, { hidden: value, unlisted: false });
+  });
+  renderList(); renderDrawer();
+  if (quiet) return;
+  const k = ids.length > 1 ? `${ids.length} notas` : 'Nota';
+  snackbar(value ? `${k} ${ids.length > 1 ? 'ocultas' : 'oculta'} en la pantalla principal` : `${k} ${ids.length > 1 ? 'visibles' : 'visible'} otra vez`,
+    'Deshacer', () => hideNotes(ids, !value, { quiet: true }));
+}
+
+/* ---------- Notas ocultables: listado para Ocultar / Mostrar / Quitar del listado ---------- */
+// Por defecto el listado incluye todas las notas. "Quitar del listado" la deja visible y fuera del listado;
+// "Restaurar listado" vuelve a incluir todas.
+const hm = { sel: new Set(), view: 'all', q: '', manage: false };
+function showHiddenManager() {
+  const pool = () => state.notes.filter((n) => !n.trashed && !n.template);
+  const listed = () => pool().filter((n) => !n.unlisted);
+  const shown = () => {
+    const q = normalize(hm.q).trim();
+    return listed()
+      .filter((n) => (hm.view === 'hidden' ? n.hidden : hm.view === 'visible' ? !n.hidden : true))
+      .filter((n) => !q || normalize(`${n.title || ''} ${n.locked && !state.unlocked.has(n.id) ? '' : (n.preview || '')}`).includes(q))
+      .sort((a, b) => (Number(!!b.hidden) - Number(!!a.hidden)) || ((b.updated || 0) - (a.updated || 0)));
+  };
+  const titleOf = (n) => (n.title || (n.locked && !state.unlocked.has(n.id) ? 'Nota bloqueada' : n.preview) || 'Nota sin título').slice(0, 90);
+  const draw = (body) => {
+    const all = listed();
+    [...hm.sel].forEach((id) => { if (!all.some((n) => n.id === id)) hm.sel.delete(id); });
+    const list = shown();
+    const nHidden = all.filter((n) => n.hidden).length;
+    const nUnlisted = pool().filter((n) => n.unlisted).length;
+    const allSel = list.length > 0 && list.every((n) => hm.sel.has(n.id));
+    const someSel = list.some((n) => hm.sel.has(n.id));
+    const seg = (v, label) => `<button class="chip ripple${hm.view === v ? ' on' : ''}" data-view="${v}"><span>${label}</span></button>`;
+    body.querySelector('.hm-head').innerHTML = `
+      <div class="hm-segs">${seg('all', `Todas (${all.length})`)}${seg('hidden', `Ocultas (${nHidden})`)}${seg('visible', `Visibles (${all.length - nHidden})`)}</div>`;
+    body.querySelector('.hm-list').innerHTML = (list.length ? `
+      <button class="picker-item ripple hm-all" data-all="1"><span class="checkbox ${allSel ? 'all' : someSel ? 'some' : 'none'}"></span><span>Seleccionar todas (${list.length})</span></button>` : '')
+      + (list.map((n) => `
+      <div class="hm-row${hm.sel.has(n.id) ? ' sel' : ''}">
+        <button class="picker-item ripple" data-id="${esc(n.id)}" aria-pressed="${hm.sel.has(n.id)}">
+          <span class="checkbox ${hm.sel.has(n.id) ? 'all' : 'none'}"></span>
+          <span class="rem-text"><strong>${esc(titleOf(n))}</strong><small>${n.archived ? 'Archivada · ' : ''}${esc(formatWhen(n.updated || n.created || Date.now()))}</small></span>
+          <span class="hm-state${n.hidden ? ' on' : ''}">${icon(n.hidden ? 'visibilityOff' : 'visibility')}<span>${n.hidden ? 'Oculta' : 'Visible'}</span></span>
+        </button>
+        <button class="icon-btn small ripple" data-open="${esc(n.id)}" aria-label="Abrir la nota" title="Abrir la nota">${icon('note')}</button>
+      </div>`).join('') || `<p class="sheet-text">${hm.q ? 'Ninguna nota coincide con la búsqueda.' : hm.view === 'hidden' ? 'No hay notas ocultas.' : 'No hay notas en el listado.'}</p>`);
+    const nSel = hm.sel.size;
+    body.querySelector('.hm-count').textContent = nSel ? `${nSel} seleccionada${nSel > 1 ? 's' : ''}` : 'Elegí una o varias notas';
+    body.querySelectorAll('[data-act]').forEach((b) => { b.disabled = !nSel && b.dataset.act !== 'manage' && b.dataset.act !== 'restore'; });
+    body.querySelector('.hm-manage').hidden = !hm.manage;
+    body.querySelector('[data-act="manage"]').classList.toggle('on', hm.manage);
+    const rest = body.querySelector('[data-act="restore"]');
+    rest.disabled = !nUnlisted;
+    rest.querySelector('span').textContent = nUnlisted ? `Restaurar listado (${nUnlisted} quitada${nUnlisted > 1 ? 's' : ''})` : 'Restaurar listado';
+    hydrateIcons(body);
+  };
+  openSheet(`<div class="hm"><h2 class="sheet-title">${icon('visibilityOff')} Notas ocultables</h2>
+    <p class="sheet-text">Las notas ocultas no aparecen en la pantalla principal de Notas; sí en carpetas, etiquetas y búsqueda, marcadas con «[Oculta]».</p>
+    <label class="field hm-search"><input type="search" id="hm-q" placeholder="Buscar en el listado" value="${esc(hm.q)}"></label>
+    <div class="hm-head"></div>
+    <div class="picker-list hm-list"></div>
+    <div class="sheet-actions hm-actions">
+      <span class="hm-count"></span><span class="spacer"></span>
+      <button class="text-btn ripple" data-act="show">Mostrar</button>
+      <button class="filled-btn ripple" data-act="hide">${icon('visibilityOff')}<span>Ocultar</span></button>
+    </div>
+    <div class="sheet-actions">
+      <button class="chip chip-outline ripple" data-act="manage">${icon('settings')}<span>Gestionar</span></button>
+    </div>
+    <div class="hm-manage" hidden>
+      <p class="sheet-text">«Quitar del listado» deja las notas elegidas visibles y ya no las muestra acá. «Restaurar listado» vuelve a mostrar todas.</p>
+      <div class="sheet-actions">
+        <button class="text-btn ripple" data-act="unlist">${icon('removeFolder')}<span>Quitar del listado</span></button>
+        <span class="spacer"></span>
+        <button class="text-btn ripple" data-act="restore">${icon('restore')}<span>Restaurar listado</span></button>
+      </div>
+    </div></div>`, (sheetBody) => {
+    // El contenedor del panel se reutiliza: los eventos van en el .hm (se reemplaza en cada apertura)
+    const body = sheetBody.querySelector('.hm');
+    draw(body);
+    body.querySelector('#hm-q').addEventListener('input', (e) => { hm.q = e.target.value; draw(body); });
+    body.addEventListener('click', async (e) => {
+      const t = e.target.closest('button'); if (!t || !body.contains(t)) return;
+      if (t.dataset.view) { hm.view = t.dataset.view; draw(body); return; }
+      if (t.dataset.all) {
+        const list = shown(); const allSel = list.every((n) => hm.sel.has(n.id));
+        list.forEach((n) => (allSel ? hm.sel.delete(n.id) : hm.sel.add(n.id))); draw(body); return;
+      }
+      if (t.dataset.open) { const id = t.dataset.open; closeOverlays(); openNote(id); return; }
+      if (t.dataset.id) { const id = t.dataset.id; if (hm.sel.has(id)) hm.sel.delete(id); else hm.sel.add(id); draw(body); return; }
+      const ids = [...hm.sel];
+      switch (t.dataset.act) {
+        case 'manage': hm.manage = !hm.manage; draw(body); break;
+        case 'hide': hideNotes(ids, true); hm.sel.clear(); draw(body); break;
+        case 'show': hideNotes(ids, false); hm.sel.clear(); draw(body); break;
+        case 'unlist': {
+          ids.forEach((id) => { const n = noteById(id); if (n) { n.hidden = false; n.unlisted = true; } state.repo.setMeta(id, { hidden: false, unlisted: true }); });
+          hm.sel.clear(); renderList(); renderDrawer(); draw(body);
+          snackbar(ids.length > 1 ? `${ids.length} notas quitadas del listado (quedan visibles)` : 'Nota quitada del listado (queda visible)', 'Deshacer', () => {
+            ids.forEach((id) => { const n = noteById(id); if (n) n.unlisted = false; state.repo.setMeta(id, { unlisted: false }); });
+            if (body.isConnected) draw(body);
+          });
+          break;
+        }
+        case 'restore': {
+          const un = pool().filter((n) => n.unlisted);
+          if (!un.length) return;
+          un.forEach((n) => { n.unlisted = false; state.repo.setMeta(n.id, { unlisted: false }); });
+          draw(body);
+          snackbar(`Listado restaurado: ${un.length > 1 ? `volvieron ${un.length} notas` : 'volvió 1 nota'}`);
+          break;
+        }
+        default:
+      }
+    });
+  });
+}
+
+/* ---------- Estadísticas e Info de la nota ---------- */
+const WORD_RE = /[\p{L}\p{N}]+(?:['’\-.][\p{L}\p{N}]+)*/gu;
+function docStats(doc, from = 0, to = doc.content.size) {
+  const st = { chars: 0, noSpaces: 0, words: 0, unique: 0, lines: 0, paragraphs: 0, sentences: 0, headings: 0, listItems: 0, tasks: 0, tasksDone: 0, images: 0, links: 0, longest: '' };
+  const texts = [];
+  const links = new Set();
+  const uniq = new Set();
+  doc.nodesBetween(from, to, (node, pos) => {
+    const name = node.type.name;
+    if (name === 'image') st.images += 1;
+    if (name === 'taskItem') { st.tasks += 1; if (node.attrs.checked) st.tasksDone += 1; }
+    if (name === 'listItem' || name === 'taskItem') st.listItems += 1;
+    if (node.isText) node.marks.forEach((m) => { if (m.type.name === 'link' && m.attrs.href) links.add(m.attrs.href); });
+    if (node.isTextblock) {
+      const a = Math.max(from, pos + 1); const b = Math.min(to, pos + node.nodeSize - 1);
+      const text = a <= b ? doc.textBetween(a, b, '\n', (leaf) => (leaf.type.name === 'hardBreak' ? '\n' : '')) : '';
+      if (name === 'heading' && text.trim()) st.headings += 1;
+      texts.push(text);
+      st.lines += text.split('\n').length;
+      if (text.trim()) st.paragraphs += 1;
+      st.sentences += (text.match(/[^.!?…\n]*[\p{L}\p{N}][^.!?…\n]*(?:[.!?…]+|$)/gmu) || []).length;
+    }
+    return true;
+  });
+  const all = texts.join('\n');
+  if (!all.trim()) st.lines = 0;
+  st.chars = all.replace(/\n/g, '').length;
+  st.noSpaces = all.replace(/\s/g, '').length;
+  const words = all.match(WORD_RE) || [];
+  st.words = words.length;
+  words.forEach((w) => { uniq.add(w.toLowerCase()); if (w.length > st.longest.length) st.longest = w; });
+  st.unique = uniq.size;
+  st.links = links.size;
+  return st;
+}
+
+function readingTime(words, wpm) {
+  if (!words) return '—';
+  const min = words / wpm;
+  if (min < 1) return 'menos de 1 min';
+  const m = Math.round(min);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+async function showNoteStats(noteId) {
+  const c = state.current;
+  if (!editor || c?.id !== noteId) return;
+  const n = noteById(noteId) || c;
+  const fmt = (x) => Number(x).toLocaleString('es-AR');
+  const doc = editor.state.doc;
+  const sel = editor.state.selection;
+  const total = docStats(doc);
+  const part = sel.empty ? null : docStats(doc, sel.from, sel.to);
+  const title = $('#note-title').value || '';
+  const row = (label, a, b) => `<tr><th>${label}</th><td>${a}</td>${part ? `<td>${b ?? ''}</td>` : ''}</tr>`;
+  const r2 = (label, key) => row(label, fmt(total[key]), part ? fmt(part[key]) : '');
+  const pct = (s) => (s.tasks ? `${fmt(s.tasksDone)}/${fmt(s.tasks)} (${Math.round((s.tasksDone / s.tasks) * 100)}%)` : '0');
+  const people = (n.memberIds || []).map((uid) => n.members?.[uid]?.name || n.members?.[uid]?.email || (uid === state.user?.uid ? 'Vos' : 'Usuario'));
+  const ownerName = n.owner ? (n.owner === state.user?.uid ? 'Vos' : (n.members?.[n.owner]?.name || n.members?.[n.owner]?.email || '—')) : 'Vos';
+  const roleName = { owner: 'Dueño/a', edit: 'Puede editar', view: 'Solo puede ver' }[myRole(n)] || '—';
+  const flags = [n.pinned && 'Fijada', n.archived && 'Archivada', n.hidden && 'Oculta', n.locked && 'Bloqueada con huella', n.template && 'Plantilla'].filter(Boolean);
+  const rems = activeReminders(noteId);
+  const next = nextOf(noteId);
+  let bytes = 0;
+  try { bytes = c.session?.snapshot()?.length || 0; } catch { bytes = 0; }
+  const size = bytes ? (bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1).replace('.', ',')} KB`) : '—';
+  const info = (label, v) => `<tr><th>${label}</th><td colspan="${part ? 2 : 1}">${v}</td></tr>`;
+  openSheet(`<h2 class="sheet-title">${icon('info')} Estadísticas e Info de la nota</h2>
+    <div class="stats-wrap"><table class="stats">
+      ${part ? '<thead><tr><th></th><th>Toda la nota</th><th>Selección</th></tr></thead>' : ''}
+      <tbody>
+      <tr class="stats-sec"><th colspan="3">Texto (sin el título)</th></tr>
+      ${r2('Caracteres', 'chars')}
+      ${r2('Caracteres sin espacios', 'noSpaces')}
+      ${r2('Palabras', 'words')}
+      ${r2('Palabras distintas', 'unique')}
+      ${r2('Líneas', 'lines')}
+      ${r2('Párrafos', 'paragraphs')}
+      ${r2('Oraciones', 'sentences')}
+      ${row('Promedio de palabras por oración', total.sentences ? fmt(Math.round(total.words / total.sentences)) : '—', part ? (part.sentences ? fmt(Math.round(part.words / part.sentences)) : '—') : '')}
+      ${row('Palabra más larga', esc(total.longest || '—'), part ? esc(part.longest || '—') : '')}
+      ${row('Título', `${fmt(title.length)} caracteres · ${fmt((title.match(WORD_RE) || []).length)} palabras`, part ? '' : null)}
+      <tr class="stats-sec"><th colspan="3">Lectura</th></tr>
+      ${row('Tiempo de lectura', readingTime(total.words, 200), part ? readingTime(part.words, 200) : '')}
+      ${row('Lectura en voz alta', readingTime(total.words, 140), part ? readingTime(part.words, 140) : '')}
+      <tr class="stats-sec"><th colspan="3">Contenido</th></tr>
+      ${row('Casillas tildadas', pct(total), part ? pct(part) : '')}
+      ${r2('Elementos de lista', 'listItems')}
+      ${r2('Encabezados', 'headings')}
+      ${r2('Imágenes', 'images')}
+      ${r2('Links', 'links')}
+      <tr class="stats-sec"><th colspan="3">Info</th></tr>
+      ${info('Creada', n.created ? esc(formatDateTime(n.created)) : '—')}
+      ${info('Última modificación', `${n.updated ? esc(formatDateTime(n.updated)) : '—'}${n.updatedByName ? ` · ${esc(n.updatedByName)}` : ''}`)}
+      ${info('Versiones guardadas', '<span id="stats-versions">…</span>')}
+      ${info('Estado', esc(flags.join(' · ') || 'Normal'))}
+      ${info('Carpetas', esc(noteFolders(n).map(folderPath).join(' · ') || 'Ninguna'))}
+      ${info('Etiquetas', esc(noteLabels(n).map((id) => labelById(id)?.name).join(' · ') || 'Ninguna'))}
+      ${info('Recordatorios activos', `${fmt(rems.length)}${next ? ` · próximo: ${esc(formatWhen(next.t))}` : ''}`)}
+      ${state.mode === 'cloud' ? info('Dueño/a', esc(ownerName)) : ''}
+      ${state.mode === 'cloud' ? info('Tu acceso', esc(roleName)) : ''}
+      ${state.mode === 'cloud' ? info('Personas con acceso', `${fmt(people.length || 1)}${people.length > 1 ? ` · ${esc(people.join(', '))}` : ''}`) : ''}
+      ${info('Tamaño aproximado', esc(size))}
+      </tbody></table></div>
+    ${part ? '' : '<p class="sheet-text stats-tip">Tip: seleccioná parte del texto antes de abrir esta ventana para ver también las cifras de la selección.</p>'}`);
+  try {
+    const list = await state.repo.listVersions(noteId);
+    const el = $('#stats-versions'); if (el) el.textContent = fmt(list.length);
+  } catch { const el = $('#stats-versions'); if (el) el.textContent = '—'; }
+}
+
+function formatDateTime(t) {
+  return new Date(t).toLocaleString('es-AR', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 function trashNotes(ids) {
   const at = Date.now();
   ids.forEach((id) => state.repo.setMeta(id, { trashed: true, trashedAt: at }));
@@ -1486,6 +1740,9 @@ function renderSelectActions() {
     more = [
       ...(f.kind === 'templates' && ids.length === 1 ? [{ label: 'Usar plantilla', onClick: () => { useTemplate(ids[0]); clearSelection(); } }] : []),
       ...(f.kind !== 'templates' ? [{ label: ids.length > 1 ? 'Guardar como plantillas' : 'Guardar como plantilla', onClick: () => { copyNotes(ids, { asTemplate: true }); clearSelection(); } }] : []),
+      ...(f.kind !== 'templates' ? [notes.every((n) => n.hidden)
+        ? { label: 'Mostrar en la pantalla principal', onClick: () => { hideNotes(ids, false); clearSelection(); } }
+        : { label: 'Ocultar de la pantalla principal', onClick: () => { hideNotes(ids, true); clearSelection(); } }] : []),
       { label: ids.length > 1 ? `Copiar ${ids.length} notas` : 'Copiar nota', onClick: () => { copyNotes(ids); clearSelection(); } },
       ...(ids.length === 1 && f.kind !== 'trash' ? [{ label: 'Copiar (o Enviar) Link', onClick: () => { openLinkSheet(ids[0]); clearSelection(); } }] : []),
       { label: 'Enviar… (a través de →)', onClick: () => { openSendSheet(ids); clearSelection(); } },
@@ -1554,6 +1811,7 @@ function matchesSearch(n) {
   const s = state.search;
   if (n.trashed || n.template) return false;
   if (n.archived && !s.archived) return false;
+  if (n.hidden && s.noHidden) return false;
   if (s.folder && !(n.folders || []).includes(s.folder)) return false;
   if (s.label && !(n.labels || []).includes(s.label)) return false;
   if (s.color && (n.color || 'default') !== s.color) return false;
@@ -1579,7 +1837,7 @@ function openSearch() {
 }
 
 function closeSearch() {
-  Object.assign(state.search, { active: false, q: '', folder: null, label: null, color: null, checks: null, days: null, archived: false });
+  Object.assign(state.search, { active: false, q: '', folder: null, label: null, color: null, checks: null, days: null, archived: false, noHidden: false });
   $('#search-input').value = '';
   $('#btn-search-clear').hidden = true;
   $('#appbar-search').hidden = true;
@@ -1615,6 +1873,7 @@ function renderSearchFilters() {
     chip('checks', 'Casillas', s.checks && checksName[s.checks]),
     chip('days', 'Fecha', s.days && daysName[s.days]),
     `<button class="chip filter-chip ripple${s.archived ? ' on' : ''}" data-filter="archived">${s.archived ? icon('check') : ''}<span>Incluir archivadas</span></button>`,
+    `<button class="chip filter-chip ripple${s.noHidden ? ' on' : ''}" data-filter="noHidden">${s.noHidden ? icon('check') : ''}<span>Excluir ocultas</span></button>`,
   ].join('');
   $('#search-filters').querySelectorAll('[data-filter]').forEach((b) => b.addEventListener('click', (e) => openFilterMenu(b.dataset.filter, e.currentTarget)));
 }
@@ -1623,6 +1882,7 @@ function openFilterMenu(key, anchor) {
   const s = state.search;
   const set = (v) => { s[key] = v; renderSearchFilters(); renderList(); };
   if (key === 'archived') { set(!s.archived); return; }
+  if (key === 'noHidden') { set(!s.noHidden); return; }
   const any = { label: 'Cualquiera', checked: !s[key], onClick: () => set(null) };
   let items = [];
   if (key === 'folder') items = folderTree().map((fo) => ({ label: `${'\u00A0\u00A0\u00A0'.repeat(fo.depth)}${esc(fo.name)}`, checked: s.folder === fo.id, onClick: () => set(fo.id) }));

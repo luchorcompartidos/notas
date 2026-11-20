@@ -26,6 +26,7 @@ const emptySummary = () => ({ title: '', preview: '', checks: { done: 0, total: 
 const DEFAULT_SETTINGS = { trashDays: 30 };
 const META_DEFAULTS = {
   color: 'default', pinned: false, archived: false, trashed: false, trashedAt: null, folders: [], labels: [],
+  hidden: false, unlisted: false, // Ocultar: personal de cada usuario
 };
 export const orgId = () => newId();
 

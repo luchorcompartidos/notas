@@ -559,3 +559,33 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
   -webkit-user-select: all; user-select: all;
 }
 .request-row { flex-wrap: wrap; }
+
+/* ===== v0.1.1: notas ocultas y estadísticas ===== */
+.hidden-tag { font-size: 12px; font-weight: 500; color: var(--on-surface-variant); white-space: nowrap; }
+.card-title-tag { margin-bottom: 2px; }
+.hm .sheet-title svg, .sheet-title > svg { vertical-align: -4px; width: 22px; height: 22px; margin-right: 4px; }
+.hm-search { margin-bottom: 8px; }
+.hm-segs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.hm-list { max-height: 46vh; }
+.hm-row { display: flex; align-items: center; gap: 2px; border-radius: 12px; }
+.hm-row.sel { background: var(--secondary-container); }
+.hm-row .picker-item { flex: 1; min-width: 0; padding-top: 6px; padding-bottom: 6px; }
+.hm-row .picker-item span:last-child { overflow: visible; }
+.hm-state { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--on-surface-variant); flex: 0 0 auto; }
+.hm-state svg { width: 16px; height: 16px; }
+.hm-state.on { color: var(--primary); font-weight: 500; }
+.hm-all { min-height: 40px; font-size: 14px; }
+.hm-count { font-size: 13px; color: var(--on-surface-variant); }
+.hm-actions .text-btn:disabled, .hm-actions .filled-btn:disabled, .hm-manage .text-btn:disabled { opacity: .4; pointer-events: none; }
+.hm-manage { border-top: 1px solid var(--outline-variant); margin-top: 8px; padding-top: 4px; }
+.hm-manage .text-btn { display: inline-flex; align-items: center; gap: 6px; }
+.hm-manage .text-btn svg { width: 18px; height: 18px; }
+.stats-wrap { max-height: 62vh; overflow-y: auto; margin: 0 -4px; }
+.stats { width: 100%; border-collapse: collapse; font-size: 14px; }
+.stats th, .stats td { padding: 6px 4px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--outline-variant); }
+.stats th { font-weight: 400; color: var(--on-surface-variant); }
+.stats td { font-weight: 500; text-align: right; overflow-wrap: anywhere; }
+.stats thead th { font-size: 12px; text-align: right; font-weight: 500; }
+.stats .stats-sec th { padding-top: 14px; color: var(--primary); font-weight: 500; font-size: 13px; border-bottom: none; }
+.stats-tip { font-size: 12px; margin-top: 10px; }
+.hm-row .rem-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
