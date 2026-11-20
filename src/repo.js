@@ -3,16 +3,25 @@
  * CloudRepo (con cuenta): Firestore.
  *   notes/{id}            → resumen compartido: dueño, miembros, título, vista previa, casillas, miniatura
  *   notes/{id}/updates/*  → cambios de Yjs (contenido de la nota)
- *   users/{uid}/meta/{id} → organización personal de cada usuario: color, fijada, papelera
+ *   users/{uid}/meta/{id} → organización personal de cada usuario: color, fijada, archivo, papelera,
+ *                           carpetas y etiquetas de la nota
+ *   users/{uid}/folders/* → carpetas (con parentId para subcarpetas)
+ *   users/{uid}/labels/*  → etiquetas (nombre y color)
+ *   users/{uid}/settings/prefs → preferencias (plazo de la papelera)
  * LocalRepo (sin cuenta): todo en este dispositivo (IndexedDB).
  */
 import {
-  collection, doc, query, where, onSnapshot, setDoc, updateDoc, getDocs, writeBatch,
+  collection, doc, query, where, onSnapshot, setDoc, updateDoc, getDocs, writeBatch, deleteDoc,
 } from 'firebase/firestore';
 import { NoteSession } from './sync.js';
 import { store, newId } from './store.js';
 
 const emptySummary = () => ({ title: '', preview: '', checks: { done: 0, total: 0 }, thumb: null });
+const DEFAULT_SETTINGS = { trashDays: 30 };
+const META_DEFAULTS = {
+  color: 'default', pinned: false, archived: false, trashed: false, trashedAt: null, folders: [], labels: [],
+};
+export const orgId = () => newId();
 
 export class CloudRepo {
   constructor(db, uid) {
@@ -42,10 +51,39 @@ export class CloudRepo {
   }
 
   list() {
-    return [...this.notes.values()].map((n) => ({
-      color: 'default', pinned: false, trashed: false, ...n, ...(this.meta.get(n.id) || {}),
-    }));
+    return [...this.notes.values()].map((n) => ({ ...META_DEFAULTS, ...n, ...(this.meta.get(n.id) || {}) }));
   }
+
+  // Carpetas, etiquetas y preferencias del usuario
+  subscribeOrg(cb) {
+    this.folders = new Map(); this.labels = new Map(); this.settings = { ...DEFAULT_SETTINGS };
+    this.settingsLoaded = false;
+    const emit = () => cb({
+      folders: [...this.folders.values()], labels: [...this.labels.values()],
+      settings: this.settings, settingsLoaded: this.settingsLoaded,
+    });
+    const u = this.uid;
+    this.unsubOrg = [
+      onSnapshot(collection(this.db, 'users', u, 'folders'), (s) => {
+        this.folders = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); emit();
+      }),
+      onSnapshot(collection(this.db, 'users', u, 'labels'), (s) => {
+        this.labels = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); emit();
+      }),
+      onSnapshot(doc(this.db, 'users', u, 'settings', 'prefs'), (d) => {
+        this.settings = { ...DEFAULT_SETTINGS, ...(d.data() || {}) };
+        if (!d.metadata.fromCache || d.exists()) this.settingsLoaded = true;
+        emit();
+      }),
+    ];
+  }
+
+  saveFolder({ id, ...data }) { this.track(setDoc(doc(this.db, 'users', this.uid, 'folders', id), data, { merge: true })); }
+  deleteFolder(id) { this.track(deleteDoc(doc(this.db, 'users', this.uid, 'folders', id))); }
+  saveLabel({ id, ...data }) { this.track(setDoc(doc(this.db, 'users', this.uid, 'labels', id), data, { merge: true })); }
+  deleteLabel(id) { this.track(deleteDoc(doc(this.db, 'users', this.uid, 'labels', id))); }
+  saveSettings(patch) { this.track(setDoc(doc(this.db, 'users', this.uid, 'settings', 'prefs'), patch, { merge: true })); }
+  canPurge(note) { return note.owner === this.uid; }
 
   track(promise) {
     this.pending++; this.onChange();
@@ -102,7 +140,7 @@ export class LocalRepo {
     all.forEach((n) => {
       // Notas de la Parte 1: su contenido pasa a Yjs la primera vez que se abren.
       if (n.content && !n.legacy) { n.legacy = n.content; delete n.content; }
-      this.items.set(n.id, { color: 'default', pinned: false, trashed: false, ...n });
+      this.items.set(n.id, { ...META_DEFAULTS, ...n });
     });
     this.serverLoaded = true;
     cb(this.list());
@@ -119,9 +157,7 @@ export class LocalRepo {
   create(extra = {}) {
     const id = newId();
     const now = Date.now();
-    this.items.set(id, {
-      id, ...emptySummary(), created: now, updated: now, color: 'default', pinned: false, trashed: false, ...extra,
-    });
+    this.items.set(id, { id, ...emptySummary(), ...META_DEFAULTS, created: now, updated: now, ...extra });
     this.persist(id);
     return id;
   }
@@ -145,4 +181,31 @@ export class LocalRepo {
   session(id, onStatus) {
     return new NoteSession(id, { onStatus });
   }
+
+  // Carpetas, etiquetas y preferencias (sin cuenta: en este dispositivo)
+  loadOrg() {
+    try { return JSON.parse(localStorage.getItem('notas-org')) || {}; } catch { return {}; }
+  }
+
+  subscribeOrg(cb) {
+    const o = this.loadOrg();
+    this.org = { folders: o.folders || {}, labels: o.labels || {}, settings: { ...DEFAULT_SETTINGS, ...(o.settings || {}) } };
+    this.orgCb = cb;
+    this.emitOrg();
+  }
+
+  emitOrg() {
+    localStorage.setItem('notas-org', JSON.stringify(this.org));
+    this.orgCb?.({
+      folders: Object.values(this.org.folders), labels: Object.values(this.org.labels),
+      settings: this.org.settings, settingsLoaded: true,
+    });
+  }
+
+  saveFolder(f) { this.org.folders[f.id] = { ...(this.org.folders[f.id] || {}), ...f }; this.emitOrg(); }
+  deleteFolder(id) { delete this.org.folders[id]; this.emitOrg(); }
+  saveLabel(l) { this.org.labels[l.id] = { ...(this.org.labels[l.id] || {}), ...l }; this.emitOrg(); }
+  deleteLabel(id) { delete this.org.labels[id]; this.emitOrg(); }
+  saveSettings(patch) { Object.assign(this.org.settings, patch); this.emitOrg(); }
+  canPurge() { return true; }
 }

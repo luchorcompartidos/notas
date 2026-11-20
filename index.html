@@ -28,17 +28,26 @@
     <!-- Lista de notas -->
     <section id="view-list" class="view" aria-label="Lista de notas">
       <header class="appbar" id="appbar-list">
-        <h1 class="appbar-title">Notas</h1>
+        <button class="icon-btn ripple" id="btn-drawer" aria-label="Menú: carpetas, etiquetas, archivo y papelera" data-icon="menu"></button>
+        <h1 class="appbar-title" id="list-title">Notas</h1>
         <button class="version-chip ripple" id="btn-version" aria-label="Versión y cambios">v__APP_VERSION__</button>
         <span class="spacer"></span>
         <button class="icon-btn ripple" id="btn-sync" aria-label="Cuenta y sincronización" data-icon="phone"></button>
         <button class="icon-btn ripple" id="btn-menu-list" aria-label="Más opciones" data-icon="more"></button>
+      </header>
+      <header class="appbar select-bar" id="appbar-select" hidden>
+        <button class="icon-btn ripple" id="btn-select-close" aria-label="Cancelar selección" data-icon="close"></button>
+        <h1 class="appbar-title" id="select-count">0</h1>
+        <span class="spacer"></span>
+        <div id="select-actions" class="select-actions"></div>
       </header>
       <div class="update-banner" id="update-banner" hidden>
         <span id="update-text">Hay una versión nueva.</span>
         <button class="text-btn ripple" id="update-action">Recargar</button>
       </div>
       <main class="scroll" id="list-scroll">
+        <p class="view-note" id="view-note" hidden></p>
+        <div class="chips-row" id="folder-children" hidden></div>
         <div id="pinned-wrap" hidden>
           <h2 class="section-label">Fijadas</h2>
           <div class="grid" id="grid-pinned"></div>
@@ -49,7 +58,7 @@
         </div>
         <div class="empty" id="empty" hidden>
           <span data-icon="note"></span>
-          <p>Las notas que crees aparecen acá</p>
+          <p id="empty-text">Las notas que crees aparecen acá</p>
         </div>
       </main>
       <button class="fab ripple" id="fab" aria-label="Nueva nota" data-icon="add"></button>
@@ -66,8 +75,13 @@
       </header>
       <main class="scroll" id="editor-scroll">
         <div class="editor-wrap">
+          <div class="trash-banner" id="trash-banner" hidden>
+            <span>Esta nota está en la papelera.</span>
+            <button class="text-btn ripple" id="btn-restore">Restaurar</button>
+          </div>
           <input id="note-title" class="note-title" type="text" placeholder="Título"
                  autocomplete="off" autocapitalize="sentences" enterkeyhint="next" spellcheck="true">
+          <div class="chips-row note-chips" id="note-chips"></div>
           <div id="editor"></div>
           <p class="edited"><span id="sync-state"></span><span id="edited"></span></p>
         </div>
@@ -94,6 +108,21 @@
   <div id="sheet" class="sheet" role="dialog" aria-label="Opciones" aria-hidden="true">
     <div class="sheet-handle"></div>
     <div id="sheet-body"></div>
+  </div>
+
+  <nav id="drawer" class="drawer" aria-label="Navegación" aria-hidden="true">
+    <div id="drawer-body"></div>
+  </nav>
+
+  <div id="dialog" class="dialog" role="dialog" aria-modal="true" hidden>
+    <h2 class="dialog-title" id="dialog-title"></h2>
+    <p class="dialog-text" id="dialog-text"></p>
+    <input class="dialog-input" id="dialog-input" type="text" autocomplete="off" autocapitalize="sentences">
+    <div class="dialog-colors" id="dialog-colors"></div>
+    <div class="dialog-actions">
+      <button class="text-btn ripple" id="dialog-cancel">Cancelar</button>
+      <button class="text-btn ripple" id="dialog-ok">Aceptar</button>
+    </div>
   </div>
 
   <div id="snackbar" class="snackbar" role="status" aria-live="polite">

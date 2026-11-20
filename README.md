@@ -12,7 +12,8 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 |---|---|---|
 | 1 | v0.0.1 | Aspecto y uso: editor con formato, casillas, imágenes, Material 3, Atrás, temas |
 | 2A | v0.0.2 | Inicio de sesión con Google (web) y sincronización con fusión de cambios |
-| 2B | v0.0.3 | Inicio de sesión nativo en Android y firma fija del APK |
+| 2B | v0.0.3–v0.0.6 | Inicio de sesión nativo en Android y firma fija del APK |
+| 1A | v0.0.7 | Carpetas con subcarpetas, nota en varias carpetas, etiquetas con color, archivo, papelera con plazo, selección múltiple, copiar |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
 
