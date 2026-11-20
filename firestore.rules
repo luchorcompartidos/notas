@@ -1,6 +1,6 @@
 rules_version = '2';
 
-// Reglas de seguridad de Firestore para Notas (v0.0.12: notas compartidas, imágenes aparte e historial).
+// Reglas de seguridad de Firestore para Notas (v0.1.0: notas compartidas, imágenes aparte, historial y pedidos de acceso).
 // Se pegan en Firebase → Firestore Database → Reglas → Publicar.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -101,6 +101,15 @@ service cloud.firestore {
         && inviteId == request.resource.data.noteId + '_' + request.resource.data.email
         && request.resource.data.role in ['edit', 'view'];
       allow delete: if signedIn() && (resource.data.email == myEmail() || resource.data.from == request.auth.uid);
+    }
+
+    // Pedidos de acceso a una nota (desde un link): el id es "<idDeLaNota>_<uid>"
+    match /accessRequests/{reqId} {
+      allow create, update: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && reqId == request.resource.data.noteId + '_' + request.auth.uid
+        && noteData(request.resource.data.noteId).owner == request.resource.data.owner;
+      allow read, delete: if signedIn() && (resource.data.uid == request.auth.uid || resource.data.owner == request.auth.uid);
     }
 
     // Organización personal de cada usuario (color, carpetas, etiquetas, recordatorios, preferencias).

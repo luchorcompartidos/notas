@@ -206,6 +206,32 @@ export class CloudRepo {
     }));
   }
 
+  /* ---------- Pedidos de acceso (desde un link) ---------- */
+  async requestAccess(noteId, owner) {
+    await setDoc(doc(this.db, 'accessRequests', `${noteId}_${this.uid}`), {
+      noteId, owner, uid: this.uid, name: this.profile.name, email: this.profile.email, created: Date.now(),
+    });
+  }
+
+  subscribeAccessRequests(cb) {
+    this.listen('pedidos', query(collection(this.db, 'accessRequests'), where('owner', '==', this.uid)), {}, (s) => {
+      cb(s.docs.map((d) => ({ id: d.id, ...d.data() })));
+    });
+  }
+
+  async approveRequest(req, role) {
+    const ref = doc(this.db, 'notes', req.noteId);
+    const note = this.notes.get(req.noteId);
+    const patch = {
+      memberIds: arrayUnion(req.uid), [`roles.${req.uid}`]: role, [`members.${req.uid}`]: { name: req.name || '', email: req.email || '' },
+    };
+    if (!note?.members?.[this.uid]) { patch[`members.${this.uid}`] = this.me(); patch[`roles.${this.uid}`] = 'owner'; }
+    await this.track(updateDoc(ref, patch));
+    await this.track(deleteDoc(doc(this.db, 'accessRequests', req.id)));
+  }
+
+  declineRequest(req) { return this.track(deleteDoc(doc(this.db, 'accessRequests', req.id))); }
+
   cancelInvite(id) { return this.track(deleteDoc(doc(this.db, 'invites', id))); }
 
   async acceptInvite(inv) {
@@ -392,6 +418,7 @@ export class LocalRepo {
   async listVersions(noteId) { return (await kv.get(`versiones:${noteId}`)) || []; }
   roleOf() { return 'owner'; }
   subscribeInvites(cb) { cb([]); }
+  subscribeAccessRequests(cb) { cb([]); }
 
   loadReminders() {
     try { return JSON.parse(localStorage.getItem('notas-recordatorios')) || {}; } catch { return {}; }

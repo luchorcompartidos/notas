@@ -47,6 +47,15 @@ public class IntentBridgePlugin extends Plugin {
         if (ACTION_NOTA.equals(action)) data.put("kind", "note");
         else if (ACTION_LISTA.equals(action)) data.put("kind", "list");
         else if (ACTION_BUSCAR.equals(action)) data.put("kind", "search");
+        else if (Intent.ACTION_VIEW.equals(action) && intent.getData() != null) {
+            // Abrir un archivo .anote desde un explorador de archivos, WhatsApp, Gmail, etc.
+            Uri uri = intent.getData();
+            String text = readText(uri);
+            if (text == null) return;
+            data.put("kind", "file");
+            data.put("name", displayName(uri));
+            data.put("text", text);
+        }
         else if (Intent.ACTION_SEND.equals(action) || Intent.ACTION_SEND_MULTIPLE.equals(action)) {
             String type = intent.getType() == null ? "" : intent.getType();
             data.put("kind", "share");
@@ -62,6 +71,14 @@ public class IntentBridgePlugin extends Plugin {
                 }
             }
             data.put("images", images);
+            Uri stream = Intent.ACTION_SEND.equals(action) ? (Uri) intent.getParcelableExtra(Intent.EXTRA_STREAM) : null;
+            if (stream != null && !type.startsWith("image/")) {
+                String name = displayName(stream);
+                if (name != null && name.toLowerCase().endsWith(".anote")) {
+                    String text = readText(stream);
+                    if (text != null) { data.put("kind", "file"); data.put("name", name); data.put("text", text); }
+                }
+            }
         } else {
             return;
         }
@@ -69,6 +86,34 @@ public class IntentBridgePlugin extends Plugin {
         intent.setAction(Intent.ACTION_MAIN);
         if (notify) notifyListeners("intentReceived", data, true);
         else pending = data;
+    }
+
+    private String readText(Uri uri) {
+        try (InputStream in = getContext().getContentResolver().openInputStream(uri)) {
+            if (in == null) return null;
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int n; int total = 0;
+            while ((n = in.read(buf)) > 0) {
+                total += n;
+                if (total > 40 * 1024 * 1024) return null;
+                out.write(buf, 0, n);
+            }
+            return out.toString("UTF-8");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String displayName(Uri uri) {
+        String name = "nota.anote";
+        try (android.database.Cursor c = getContext().getContentResolver().query(uri, new String[] { android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+            if (c != null && c.moveToFirst()) name = c.getString(0);
+        } catch (Exception e) {
+            String p = uri.getLastPathSegment();
+            if (p != null) name = p;
+        }
+        return name;
     }
 
     private void addImage(JSArray arr, Uri uri, String type) {

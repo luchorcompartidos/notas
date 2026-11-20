@@ -170,3 +170,19 @@ export function showWebNotification(title, body, tag, onClick) {
 }
 
 export { SNOOZE_MIN };
+
+// Aviso inmediato (por ejemplo, alguien pidió acceso a una nota tuya)
+export async function notifyNow(title, body, extra = {}) {
+  if (isNative) {
+    try {
+      const p = await LocalNotifications.checkPermissions();
+      if (p.display !== 'granted') return;
+      await LocalNotifications.schedule({ notifications: [{
+        id: Math.floor(Math.random() * 1000000000) + 1000000000, title, body, largeBody: body,
+        schedule: { at: new Date(Date.now() + 500), allowWhileIdle: true }, smallIcon: 'ic_stat_notas', iconColor: '#6750A4', extra,
+      }] });
+    } catch { /* nada */ }
+    return;
+  }
+  showWebNotification(title, body, `aviso-${Date.now()}`);
+}

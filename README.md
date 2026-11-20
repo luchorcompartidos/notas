@@ -1,4 +1,4 @@
-# Notas — Prueba de concepto
+# ANote... — notas sincronizadas (web + Android)
 
 App de notas con **web + Android (Capacitor)** a partir de un solo código, con sincronización entre
 dispositivos y **fusión de cambios** (Yjs + Firestore).
@@ -21,6 +21,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | 5 | v0.0.12 | Imágenes guardadas aparte (sin límite por nota), historial de versiones, exportar (PDF, .docx, .md, .txt, .json) e importar (.json, .md, .txt, .docx, .pdf, .html), notas bloqueadas con huella |
 | — | v0.0.13 | Enviar a WhatsApp (texto con formato, imágenes, PDF/Word/txt como adjunto) |
 | — | v0.0.14 | Sincronización reforzada: estado de verificación por nota, conexión real, cola de cambios pendientes, reintentos, «tirar para actualizar» y «Reintentar ahora» |
+| — | v0.1.0 | Marca ANote..., vista compacta (1 a 5 líneas) y estándar con límite de 1/3, contraer/expandir, flecha de «más notas», formato .anote, «Copiar (o Enviar) Link» y pedidos de acceso al dueño |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
 

@@ -12,6 +12,7 @@ import {
   toWhatsApp, noteImages, shareMessage, shareFile,
 } from './transfer.js';
 import { verifyUser } from './lock.js';
+import { notifyNow } from './reminders.js';
 import { getPreview, domainOf, previewsEnabled, setPreviewsEnabled } from './links.js';
 import {
   REPEATS, SNOOZE_MIN, nextOccurrence, formatWhen, initNativeReminders, ensureNativePermissions,
@@ -46,6 +47,7 @@ const state = {
   reminders: [],
   invites: [],
   unlocked: new Set(),
+  requests: [],
 };
 
 const SORTS = [['updated', 'Fecha de modificación'], ['created', 'Fecha de creación'], ['title', 'Título (A-Z)'], ['manual', 'Manual (arrastrar)']];
@@ -351,9 +353,9 @@ function onList(list) {
   if (state.firstList && state.repo?.serverLoaded) {
     state.firstList = false;
     maybeWelcome();
-    const m = location.hash.match(/^#\/nota\/(.+)$/);
-    if (m && state.view !== 'editor') openNote(m[1], { push: false });
+    openFromHash();
   }
+  checkGranted(list);
   maybePurge();
   scheduleReminders();
   if (pendingOpenNote && list.some((n) => n.id === pendingOpenNote)) { const id = pendingOpenNote; pendingOpenNote = null; openNote(id); }
@@ -413,7 +415,7 @@ function renderList() {
   const pinned = usePinned ? visible.filter((n) => n.pinned) : [];
   const others = usePinned ? visible.filter((n) => !n.pinned) : visible;
 
-  $('#list-title').textContent = filterTitle();
+  if (!searching && f.kind === 'notes') $('#list-title').innerHTML = BRAND; else $('#list-title').textContent = filterTitle();
   fillGrid($('#grid-pinned'), pinned);
   fillGrid($('#grid-others'), others);
   $('#pinned-wrap').hidden = pinned.length === 0;
@@ -462,6 +464,7 @@ function renderList() {
   // La selección solo conserva notas visibles
   [...state.selection].forEach((id) => { if (!visible.some((n) => n.id === id)) state.selection.delete(id); });
   updateSelectionUi();
+  requestAnimationFrame(() => { markClamped(); updateMoreBelow(); });
 }
 
 function cardEl(n) {
@@ -543,6 +546,12 @@ function cardEl(n) {
     }
     el.appendChild(row);
   }
+
+  // Contenido de la tarjeta (se recorta en la vista estándar o compacta)
+  const body = document.createElement('div');
+  body.className = 'card-body';
+  [...el.children].forEach((ch) => { if (!ch.classList.contains('card-check')) body.appendChild(ch); });
+  el.appendChild(body);
 
   if (manualMode()) {
     const h = document.createElement('button');
@@ -847,15 +856,16 @@ function bindEditorUi() {
       { label: 'Restaurar', onClick: () => { restoreNotes([c.id]); c.trashed = false; paintEditorChrome(); } },
       { label: 'Eliminar definitivamente', onClick: async () => { const id = c.id; if (await deleteForever([id])) goBack(); } },
     ] : [
-      { label: 'Compartir…', onClick: () => openShareSheet(c.id) },
+      { label: 'Compartir Acceso → Invitar Usuario', onClick: () => openShareSheet(c.id) },
+      { label: 'Copiar (o Enviar) Link', onClick: () => openLinkSheet(c.id) },
       { label: 'Carpetas…', onClick: () => openPicker([c.id], 'folders') },
       { label: 'Etiquetas…', onClick: () => openPicker([c.id], 'labels') },
       ...(noteFolders(c).length ? [{ label: 'Ver en qué carpetas está', onClick: () => showOccurrences(c.id) }] : []),
       { divider: true },
       { label: c.archived ? 'Desarchivar' : 'Archivar', onClick: () => { const id = c.id; const v = !c.archived; goBack(); archiveNotes([id], v); } },
       { label: 'Historial de versiones', onClick: () => showVersions(c.id) },
-      { label: 'Enviar… (WhatsApp, mail)', onClick: () => openSendSheet([c.id]) },
-      { label: 'Exportar…', onClick: () => openExportSheet([c.id]) },
+      { label: 'Enviar… (a través de →)', onClick: () => openSendSheet([c.id]) },
+      { label: 'Exportar y Descargar…', onClick: () => openExportSheet([c.id]) },
       { label: (noteById(c.id)?.locked ? 'Quitar el bloqueo' : 'Bloquear con huella'), onClick: () => setLocked([c.id], !noteById(c.id)?.locked) },
       { label: 'Copiar nota', onClick: async () => { await saveSummaryNow(); copyNotes([c.id]); } },
       c.template
@@ -905,7 +915,8 @@ $('#btn-menu-list').addEventListener('click', (e) => {
     ...ctx,
     { label: 'Ordenar por…', onClick: showSortSheet },
     { label: 'Nueva nota desde plantilla…', onClick: pickTemplate },
-    { label: 'Exportar todas las notas…', onClick: () => openExportSheet(state.notes.filter((n) => !n.trashed).map((n) => n.id)) },
+    { label: 'Vista de la lista (compacta / estándar)…', onClick: showListSettings },
+    { label: 'Exportar y Descargar todas las notas…', onClick: () => openExportSheet(state.notes.filter((n) => !n.trashed).map((n) => n.id)) },
     { label: 'Importar notas…', onClick: pickImportFiles },
     { label: 'Vista previa de links', checked: previewsEnabled(), onClick: () => { setPreviewsEnabled(!previewsEnabled()); snackbar(previewsEnabled() ? 'Vista previa de links activada' : 'Vista previa de links desactivada'); } },
     { divider: true },
@@ -920,8 +931,8 @@ $('#btn-menu-list').addEventListener('click', (e) => {
 function showVersion() {
   const r = state.release;
   openSheet(`
-    <h2 class="sheet-title">Notas v${esc(APP_VERSION)}</h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 5 · sincronización reforzada</p>
+    <h2 class="sheet-title">${BRAND} <small class="ver">v${esc(APP_VERSION)}</small></h2>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · marca ANote..., vista compacta, link y pedidos de acceso</p>
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);
@@ -977,6 +988,7 @@ function startRepo(repo, mode) {
   repo.subscribeOrg(onOrg);
   repo.subscribeReminders(onReminders);
   repo.subscribeInvites(onInvites);
+  repo.subscribeAccessRequests(onAccessRequests);
   updateSyncIcon();
   setView('list');
 }
@@ -996,6 +1008,7 @@ function startLocal() {
 
 function showLogin() {
   state.mode = null;
+  $('#login-link-hint').hidden = !parseNoteHash();
   setView('login');
 }
 
@@ -1049,11 +1062,11 @@ function maybeWelcome() {
   ];
   const intro = state.mode === 'cloud'
     ? '<p>Esta es la <strong>Parte 2A</strong> de la prueba: sincronización con <em>fusión de cambios</em>. Lo que edites en un dispositivo aparece en los otros, y si editás sin conexión, al reconectar se combinan los cambios sin perder nada.</p>'
-    : '<p>Estás usando Notas <strong>sin cuenta</strong>: todo se guarda en este dispositivo.</p>';
+    : '<p>Estás usando ANote... <strong>sin cuenta</strong>: todo se guarda en este dispositivo.</p>';
   const html = `${intro}<h2>Qué probar</h2><ul data-type="taskList">${items.map((t) => `<li data-type="taskItem" data-checked="false"><p>${t}</p></li>`).join('')}</ul>`;
   const id = state.repo.create({
-    title: state.mode === 'cloud' ? 'Bienvenido a Notas (sincronización)' : 'Bienvenido a Notas',
-    preview: state.mode === 'cloud' ? 'Esta es la Parte 2A de la prueba: sincronización con fusión de cambios.' : 'Estás usando Notas sin cuenta.',
+    title: state.mode === 'cloud' ? 'Bienvenido a ANote... (sincronización)' : 'Bienvenido a ANote...',
+    preview: state.mode === 'cloud' ? 'Esta es la Parte 2A de la prueba: sincronización con fusión de cambios.' : 'Estás usando ANote... sin cuenta.',
     checks: { done: 0, total: items.length },
     legacy: html,
   });
@@ -1157,7 +1170,7 @@ function renderDrawer() {
     `<i class="dot dot-lg" style="background:${esc(l.color || '#757575')}"></i>`, l.name));
 
   $('#drawer-body').innerHTML = `
-    <div class="drawer-head">Notas</div>
+    <div class="drawer-head">${BRAND}</div>
     ${item('notes', null, icon('note'), 'Notas')}
     <div class="drawer-section"><span>Carpetas</span><button class="icon-btn small ripple" id="drawer-new-folder" aria-label="Nueva carpeta">${icon('folderAdd')}</button></div>
     ${folders.join('') || '<p class="drawer-empty">Todavía no hay carpetas</p>'}
@@ -1474,8 +1487,9 @@ function renderSelectActions() {
       ...(f.kind === 'templates' && ids.length === 1 ? [{ label: 'Usar plantilla', onClick: () => { useTemplate(ids[0]); clearSelection(); } }] : []),
       ...(f.kind !== 'templates' ? [{ label: ids.length > 1 ? 'Guardar como plantillas' : 'Guardar como plantilla', onClick: () => { copyNotes(ids, { asTemplate: true }); clearSelection(); } }] : []),
       { label: ids.length > 1 ? `Copiar ${ids.length} notas` : 'Copiar nota', onClick: () => { copyNotes(ids); clearSelection(); } },
-      { label: 'Enviar… (WhatsApp, mail)', onClick: () => { openSendSheet(ids); clearSelection(); } },
-      { label: 'Exportar…', onClick: () => { openExportSheet(ids); clearSelection(); } },
+      ...(ids.length === 1 && f.kind !== 'trash' ? [{ label: 'Copiar (o Enviar) Link', onClick: () => { openLinkSheet(ids[0]); clearSelection(); } }] : []),
+      { label: 'Enviar… (a través de →)', onClick: () => { openSendSheet(ids); clearSelection(); } },
+      { label: 'Exportar y Descargar…', onClick: () => { openExportSheet(ids); clearSelection(); } },
       { label: notes.every((n) => n.locked) ? 'Quitar el bloqueo' : 'Bloquear con huella', onClick: () => { setLocked(ids, !notes.every((n) => n.locked)); clearSelection(); } },
       ...(f.kind === 'folder' ? [{ label: 'Quitar de esta carpeta', onClick: () => { removeFromFolder(ids, f.id); clearSelection(); } }] : []),
       selectAll,
@@ -2071,7 +2085,7 @@ function openShareSheet(noteId) {
     }));
   };
 
-  openSheet(`<h2 class="sheet-title">Compartir</h2>
+  openSheet(`<h2 class="sheet-title">Compartir Acceso → Invitar Usuario</h2>
     <div class="picker-list share-members"></div>
     ${owner ? `
       <div class="share-form">
@@ -2080,7 +2094,7 @@ function openShareSheet(noteId) {
         <label class="field"><span>Permiso</span>
           <select id="share-role"><option value="edit">Puede editar</option><option value="view">Solo puede ver</option></select></label>
       </div>
-      <p class="sheet-text">La persona ve la invitación al abrir Notas con esa cuenta. Avisale para que la acepte.</p>
+      <p class="sheet-text">La persona ve la invitación al abrir ANote... con esa cuenta. Avisale para que la acepte.</p>
       <div class="sheet-actions"><span class="spacer"></span><button class="filled-btn ripple" id="share-send">${icon('personAdd')}<span>Invitar</span></button></div>`
     : `<p class="sheet-text">Tu permiso: ${ROLE_NAMES[role]}. Solo el dueño puede invitar o cambiar permisos.</p>
       <div class="sheet-actions"><span class="spacer"></span><button class="text-btn danger ripple" id="share-leave">Salir de esta nota</button></div>`}`, (body) => {
@@ -2144,6 +2158,7 @@ async function runIntent(data) {
     return;
   }
   if (data.kind === 'share') await noteFromShare(data);
+  if (data.kind === 'file') await importAnoteText(data.name, data.text);
 }
 
 const linkify = (line) => esc(line).replace(/https?:\/\/[^\s<>"']+/gi, (u) => `<a href="${u}">${u}</a>`);
@@ -2324,6 +2339,7 @@ const EXPORTS = [
   ['docx', 'Word (.docx)', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
   ['md', 'Markdown (.md)', 'text/markdown'],
   ['txt', 'Texto (.txt)', 'text/plain'],
+  ['anote', 'ANote... (.anote, se abre con la app)', 'application/vnd.anote+json'],
   ['json', 'Copia de seguridad (.json, se puede importar)', 'application/json'],
 ];
 
@@ -2394,6 +2410,7 @@ async function exportNotes(ids, fmt) {
     else if (fmt === 'docx') blob = await toDocx(notes);
     else if (fmt === 'md') blob = new Blob([notes.map(toMarkdown).join('\n---\n\n')], { type: mime });
     else if (fmt === 'txt') blob = new Blob([notes.map(toText).join('\n\n----------\n\n')], { type: mime });
+    else if (fmt === 'anote') blob = new Blob([toBackup(notes.map((n) => ({ ...n, content: n.json, json: undefined })), APP_VERSION)], { type: mime });
     else blob = new Blob([toBackup(notes.map((n) => ({ ...n, content: n.json, json: undefined })), APP_VERSION)], { type: mime });
     await deliverFile(`${base}.${fmt}`, blob);
     hideSnack();
@@ -2509,7 +2526,7 @@ function pickImportFiles() {
   const input = document.createElement('input');
   input.type = 'file';
   input.multiple = true;
-  input.accept = '.json,.md,.markdown,.txt,.docx,.pdf,.html,.htm,application/json,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/html';
+  input.accept = '.anote,.json,.md,.markdown,.txt,.docx,.pdf,.html,.htm,application/json,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/html';
   input.addEventListener('change', () => importFiles([...input.files]));
   input.click();
 }
@@ -2684,6 +2701,260 @@ setInterval(() => { if (state.mode === 'cloud') { updateSyncIcon(); updateNoteSt
   });
 })();
 
+/* ---------- v0.1.0: marca, vista compacta, link a la nota, pedidos de acceso y archivo .anote ---------- */
+const BRAND = '<span class="brand"><b class="brand-a">A</b><b class="brand-n">N</b>ote...</span>';
+const WEB_URL = 'https://luchorcompartidos.github.io/notas/';
+
+// "#/nota/<id>?o=<dueño>" (el dueño va en el link para poder pedirle acceso)
+function parseNoteHash(hash = location.hash) {
+  const m = /^#\/nota\/([^?&]+)(?:\?o=([^&]+))?/.exec(hash || '');
+  return m ? { id: decodeURIComponent(m[1]), owner: m[2] ? decodeURIComponent(m[2]) : null } : null;
+}
+
+/* --- Vista de lista: estándar o compacta (contraer / expandir) --- */
+const density = () => localStorage.getItem('notas-density') || 'standard';
+const compactLines = () => Math.min(5, Math.max(1, Number(localStorage.getItem('notas-compact-lines') || 2)));
+const expandedCards = new Set();
+
+function applyDensity() {
+  const compact = density() === 'compact';
+  root.classList.toggle('compact', compact);
+  root.style.setProperty('--compact-lines', String(compactLines()));
+  const b = $('#btn-density');
+  b.innerHTML = icon(compact ? 'unfoldMore' : 'unfoldLess');
+  b.setAttribute('aria-label', compact ? 'Expandir todo' : 'Contraer todo');
+  b.title = compact ? 'Expandir todo' : 'Contraer todo';
+  updateCardLimit();
+}
+
+// En la vista estándar, una nota larga ocupa como máximo 1/3 del alto de la lista
+function updateCardLimit() {
+  const h = $('#list-scroll').clientHeight || window.innerHeight;
+  root.style.setProperty('--card-max', `${Math.max(160, Math.round(h / 3) - 8)}px`);
+}
+
+// Marca las tarjetas recortadas y les agrega la flecha para expandirlas
+function markClamped() {
+  document.querySelectorAll('#list-scroll .card').forEach((card) => {
+    const id = card.dataset.id;
+    const expanded = expandedCards.has(id);
+    card.classList.toggle('expanded', expanded);
+    const body = card.querySelector('.card-body');
+    if (!body) return;
+    const text = card.querySelector('.card-text');
+    const textClamped = !!text && text.scrollHeight > text.clientHeight + 2;
+    const imgHidden = root.classList.contains('compact') && !!card.querySelector('.card-img');
+    const clamped = expanded || body.scrollHeight > body.clientHeight + 2 || textClamped || imgHidden;
+    card.classList.toggle('clamped', clamped && !expanded);
+    let t = card.querySelector('.card-expand');
+    if (clamped) {
+      if (!t) {
+        t = document.createElement('button');
+        t.className = 'card-expand';
+        t.addEventListener('pointerdown', (e) => e.stopPropagation());
+        t.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (expandedCards.has(id)) expandedCards.delete(id); else expandedCards.add(id);
+          markClamped();
+          updateMoreBelow();
+        });
+        card.appendChild(t);
+      }
+      t.innerHTML = icon(expanded ? 'unfoldLess' : 'expand');
+      t.setAttribute('aria-label', expanded ? 'Contraer' : 'Expandir');
+    } else t?.remove();
+  });
+}
+
+// Flecha flotante: avisa que hay más notas abajo y avanza una "página"
+function updateMoreBelow() {
+  const sc = $('#list-scroll');
+  const more = state.view === 'list' && !state.selection.size && sc.scrollTop + sc.clientHeight < sc.scrollHeight - 24;
+  $('#btn-more-below').hidden = !more;
+}
+
+$('#btn-density').addEventListener('click', () => {
+  localStorage.setItem('notas-density', density() === 'compact' ? 'standard' : 'compact');
+  expandedCards.clear();
+  applyDensity();
+  renderList();
+  snackbar(density() === 'compact' ? `Vista compacta: título y ${compactLines()} línea${compactLines() > 1 ? 's' : ''}` : 'Vista estándar');
+});
+$('#btn-more-below').addEventListener('click', () => {
+  const sc = $('#list-scroll');
+  sc.scrollBy({ top: Math.round(sc.clientHeight * 0.85), behavior: 'smooth' });
+});
+$('#list-scroll').addEventListener('scroll', updateMoreBelow, { passive: true });
+window.addEventListener('resize', () => { updateCardLimit(); markClamped(); updateMoreBelow(); });
+
+function showListSettings() {
+  const d = density(); const n = compactLines();
+  openSheet(`<h2 class="sheet-title">Vista de la lista</h2>
+    <div class="picker-list">
+      <button class="picker-item ripple" data-d="standard"><span class="radio${d === 'standard' ? ' on' : ''}"></span><span class="rem-text"><strong>Estándar</strong><small>Cada nota se ve entera; las largas ocupan como máximo 1/3 de la pantalla</small></span></button>
+      <button class="picker-item ripple" data-d="compact"><span class="radio${d === 'compact' ? ' on' : ''}"></span><span class="rem-text"><strong>Compacta</strong><small>Título y la cantidad de líneas elegida</small></span></button>
+    </div>
+    <p class="sheet-text">Líneas en la vista compacta (además del título):</p>
+    <div class="chips-row lines-pick">${[1, 2, 3, 4, 5].map((k) => `<button class="chip ripple${k === n ? ' on' : ''}" data-l="${k}">${k}</button>`).join('')}</div>`, (body) => {
+    body.querySelectorAll('[data-d]').forEach((b) => b.addEventListener('click', () => {
+      localStorage.setItem('notas-density', b.dataset.d);
+      body.querySelectorAll('[data-d] .radio').forEach((x) => x.classList.toggle('on', x.parentElement === b));
+      expandedCards.clear(); applyDensity(); renderList();
+    }));
+    body.querySelectorAll('[data-l]').forEach((b) => b.addEventListener('click', () => {
+      localStorage.setItem('notas-compact-lines', b.dataset.l);
+      localStorage.setItem('notas-density', 'compact');
+      body.querySelectorAll('[data-l]').forEach((x) => x.classList.toggle('on', x === b));
+      body.querySelectorAll('[data-d] .radio').forEach((x) => x.classList.toggle('on', x.parentElement.dataset.d === 'compact'));
+      applyDensity(); renderList();
+    }));
+  });
+}
+
+/* --- Copiar o enviar el link de la nota --- */
+async function openLinkSheet(id) {
+  const n = noteById(id);
+  if (!n) return;
+  if (state.mode !== 'cloud') {
+    openSheet('<h2 class="sheet-title">Link de la nota</h2><p class="sheet-text">Para tener un link hace falta iniciar sesión con Google: sin cuenta, la nota está solo en este dispositivo.</p>');
+    return;
+  }
+  const link = `${WEB_URL}#/nota/${encodeURIComponent(id)}?o=${encodeURIComponent(n.owner || state.user.uid)}`;
+  let copied = false;
+  try { await navigator.clipboard.writeText(link); copied = true; } catch { /* sin portapapeles */ }
+  openSheet(`<h2 class="sheet-title">Link de la nota</h2>
+    <p class="sheet-text">${copied ? '✓ Copiado al portapapeles. ' : ''}Lo pueden abrir vos y las personas con acceso; quien no lo tenga puede pedírtelo desde el link.</p>
+    <input class="link-field" id="link-field" readonly value="${esc(link)}">
+    <div class="sheet-actions"><button class="text-btn ripple" id="link-copy">Copiar</button><span class="spacer"></span>
+      <button class="filled-btn ripple" id="link-share">${icon('share')}<span>Enviar link</span></button></div>`, (body) => {
+    const f = body.querySelector('#link-field');
+    const selectAll = () => { f.focus(); f.select(); f.setSelectionRange(0, link.length); };
+    f.addEventListener('click', selectAll);
+    body.querySelector('#link-copy').addEventListener('click', async () => {
+      selectAll();
+      try { await navigator.clipboard.writeText(link); snackbar('Link copiado'); } catch { document.execCommand?.('copy'); snackbar('Link copiado'); }
+    });
+    body.querySelector('#link-share').addEventListener('click', () => shareLink(n.title, link));
+  });
+  setTimeout(() => shareLink(n.title, link), 350); // abre el menú "Compartir" enseguida
+}
+
+async function shareLink(title, link) {
+  const text = title ? `${title}\n${link}` : link;
+  try {
+    if (isNative) {
+      const sh = await import('@capacitor/share');
+      await sh.Share.share({ title: title || 'Nota', text, url: link, dialogTitle: 'Enviar link' });
+    } else if (navigator.share) {
+      await navigator.share({ title: title || 'Nota', text: title || undefined, url: link });
+    }
+  } catch { /* cancelado */ }
+}
+
+/* --- Abrir un link sin acceso: pedir acceso al dueño --- */
+async function showNoAccess(id, owner) {
+  history.replaceState(null, '', location.pathname + location.search);
+  const requested = JSON.parse(localStorage.getItem('notas-pedidos') || '[]');
+  const r = await openDialog({
+    title: 'No tenés acceso a esta nota',
+    text: owner
+      ? (requested.includes(id) ? 'Ya pediste acceso: el dueño lo ve al abrir ANote... ¿Volver a pedirlo?' : 'Podés pedirle acceso al dueño. Cuando te lo dé, la nota aparece en «Compartidas conmigo».')
+      : 'Pedile al dueño que te comparta el acceso (o puede que la nota ya no exista).',
+    ok: owner ? 'Solicitar acceso' : 'Entendido',
+  });
+  if (!r || !owner) return;
+  try {
+    await state.repo.requestAccess(id, owner);
+    localStorage.setItem('notas-pedidos', JSON.stringify([...new Set([...requested, id])]));
+    snackbar('Pedido enviado. Te avisamos cuando te den acceso');
+  } catch (e) {
+    snackbar(e?.code === 'permission-denied' ? 'No se pudo pedir acceso: la nota no existe o el link está incompleto' : `No se pudo pedir acceso (${e?.code || 'error'})`);
+  }
+}
+
+function openFromHash() {
+  const h = parseNoteHash();
+  if (!h || state.view === 'editor') return;
+  if (state.notes.some((n) => n.id === h.id)) openNote(h.id, { push: false });
+  else if (state.mode === 'cloud') showNoAccess(h.id, h.owner);
+}
+
+// Avisar cuando te dan acceso a una nota que pediste
+function checkGranted(list) {
+  const requested = JSON.parse(localStorage.getItem('notas-pedidos') || '[]');
+  if (!requested.length) return;
+  const got = requested.filter((id) => list.some((n) => n.id === id));
+  if (!got.length) return;
+  localStorage.setItem('notas-pedidos', JSON.stringify(requested.filter((id) => !got.includes(id))));
+  const n = list.find((x) => x.id === got[0]);
+  snackbar(`Te dieron acceso a «${n?.title || 'una nota'}»`, 'Abrir', () => openNote(got[0]));
+  notifyNow('Te dieron acceso a una nota', n?.title || 'Abrila desde «Compartidas conmigo»');
+}
+
+/* --- Pedidos de acceso recibidos (soy el dueño) --- */
+let knownRequests = null;
+function onAccessRequests(list) {
+  state.requests = list;
+  const b = $('#requests-banner');
+  b.hidden = !list.length;
+  if (list.length) {
+    const r0 = list[0];
+    const title = noteById(r0.noteId)?.title || 'una nota';
+    $('#requests-text').textContent = list.length === 1
+      ? `${r0.name || r0.email} pidió acceso a «${title}»`
+      : `${list.length} pedidos de acceso a tus notas`;
+  }
+  // Aviso en el momento (si la app está abierta) por cada pedido nuevo
+  if (knownRequests) {
+    list.filter((r) => !knownRequests.has(r.id)).forEach((r) => {
+      notifyNow('Pedido de acceso', `${r.name || r.email} pidió acceso a «${noteById(r.noteId)?.title || 'una nota'}»`, { kind: 'pedido' });
+    });
+  }
+  knownRequests = new Set(list.map((r) => r.id));
+}
+
+function showRequests() {
+  const list = state.requests || [];
+  openSheet(`<h2 class="sheet-title">Pedidos de acceso</h2>
+    ${list.length ? '' : '<p class="sheet-text">No hay pedidos pendientes.</p>'}
+    <div class="picker-list">${list.map((r) => `
+      <div class="rem-row request-row">
+        <span class="avatar">${esc((r.name || r.email || '?').slice(0, 1).toUpperCase())}</span>
+        <div class="rem-text"><strong>${esc(r.name || r.email)}</strong><small>${esc(r.email || '')} · «${esc(noteById(r.noteId)?.title || 'Nota')}»</small></div>
+        <select class="role-select" data-role-for="${esc(r.id)}"><option value="edit">Puede editar</option><option value="view">Solo puede ver</option></select>
+        <button class="icon-btn small ripple" data-decline="${esc(r.id)}" aria-label="Rechazar">${icon('close')}</button>
+        <button class="filled-btn ripple" data-approve="${esc(r.id)}">Dar acceso</button>
+      </div>`).join('')}</div>`, (body) => {
+    body.querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', async () => {
+      const r = list.find((x) => x.id === b.dataset.approve);
+      const role = body.querySelector(`[data-role-for="${CSS.escape(r.id)}"]`).value;
+      b.disabled = true;
+      try { await state.repo.approveRequest(r, role); snackbar(`Acceso dado a ${r.name || r.email}`); closeOverlays(); } catch (e) { b.disabled = false; snackbar(`No se pudo dar acceso (${e?.code || 'error'})`); }
+    }));
+    body.querySelectorAll('[data-decline]').forEach((b) => b.addEventListener('click', async () => {
+      const r = list.find((x) => x.id === b.dataset.decline);
+      await state.repo.declineRequest(r);
+      snackbar('Pedido rechazado'); closeOverlays();
+    }));
+  });
+}
+$('#requests-action').addEventListener('click', showRequests);
+
+/* --- Archivo .anote abierto desde Android o desde la PC --- */
+async function importAnoteText(name, text) {
+  const file = new File([text], name && name.toLowerCase().endsWith('.anote') ? name : 'nota.anote', { type: 'application/vnd.anote+json' });
+  await importFiles([file]);
+}
+if (!isNative && 'launchQueue' in window) {
+  window.launchQueue.setConsumer(async (params) => {
+    const files = [];
+    for (const h of params.files || []) { try { files.push(await h.getFile()); } catch { /* nada */ } }
+    if (!files.length) return;
+    const wait = () => (state.repo?.serverLoaded ? importFiles(files) : setTimeout(wait, 500));
+    wait();
+  });
+}
+
 /* ---------- Inicio ---------- */
 function init() {
   hydrateIcons();
@@ -2692,6 +2963,7 @@ function init() {
   bindEditorUi();
   initNative({ onBack: goBack });
   initNativeReminders(handleReminderAction);
+  applyDensity();
   listenIntents(onIntent);
   // Web: funciona sin conexión (service worker) e instalable como app
   if (!isNative && 'serviceWorker' in navigator && location.protocol === 'https:') {
@@ -2715,8 +2987,8 @@ function init() {
 
   window.addEventListener('popstate', () => {
     closeOverlays();
-    const m = location.hash.match(/^#\/nota\/(.+)$/);
-    if (m) { if (state.view !== 'editor' && state.repo) { openNote(m[1], { push: false }); state.pushed = false; } }
+    const h = parseNoteHash();
+    if (h) { if (state.view !== 'editor' && state.repo) { state.pushed = false; openFromHash(); } }
     else if (state.view === 'editor') { state.pushed = false; closeEditor(); }
   });
 

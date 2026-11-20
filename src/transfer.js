@@ -222,7 +222,7 @@ export async function toPdf(notes) {
 
 /* ---------- Copia de seguridad (.json) ---------- */
 export function toBackup(notes, version) {
-  return JSON.stringify({ app: 'Notas', format: 1, version, exported: new Date().toISOString(), notes }, null, 2);
+  return JSON.stringify({ app: 'ANote', format: 1, version, exported: new Date().toISOString(), notes }, null, 2);
 }
 
 /* ---------- Entregar el archivo (descarga en la web, compartir/guardar en Android) ---------- */
@@ -320,9 +320,9 @@ async function pdfToHtml(file) {
 // Devuelve las notas a crear: { title, html } o { title, json, meta }
 export async function readImport(file) {
   const ext = (file.name.split('.').pop() || '').toLowerCase();
-  if (ext === 'json') {
+  if (ext === 'json' || ext === 'anote') {
     const j = JSON.parse(await file.text());
-    if (j?.app !== 'Notas' || !Array.isArray(j.notes)) throw new Error('No es una copia de seguridad de Notas');
+    if (!['Notas', 'ANote', 'ANote...'].includes(j?.app) || !Array.isArray(j.notes)) throw new Error('No es un archivo de ANote...');
     return j.notes.map((n) => ({ title: n.title || '', json: n.content, meta: n }));
   }
   if (ext === 'md' || ext === 'markdown') {

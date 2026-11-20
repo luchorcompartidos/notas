@@ -511,3 +511,51 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
 .pull-indicator.ready .pull-spinner { border-color: var(--primary); border-top-color: transparent; }
 .pull-indicator.spinning .pull-spinner { animation: girar .8s linear infinite; border-color: var(--outline-variant); border-top-color: var(--primary); }
 @keyframes girar { to { transform: rotate(360deg); } }
+
+/* ===== v0.1.0: marca ANote... ===== */
+.brand { font-weight: 400; letter-spacing: .2px; white-space: nowrap; }
+.brand-a { color: var(--primary); font-weight: 800; }
+.brand-n { font-weight: 800; color: inherit; }
+.login-title .brand { font-size: 34px; }
+.drawer-head .brand { font-size: 24px; }
+.sheet-title .ver { font-size: 13px; font-weight: 400; color: var(--on-surface-variant); }
+
+/* ===== Vista estándar: notas largas como máximo 1/3 de la lista; vista compacta ===== */
+:root { --card-max: 260px; --compact-lines: 2; }
+.card-body { position: relative; max-height: var(--card-max); overflow: hidden; }
+.card.expanded .card-body { max-height: none; }
+.card-text { display: block; -webkit-line-clamp: unset; }
+.card.clamped .card-body::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 36px; pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--note-bg, var(--surface)));
+}
+.compact .card-body { max-height: none; }
+.compact .card:not(.expanded) .card-img { display: none; }
+.compact .card:not(.expanded) .card-text { display: -webkit-box; -webkit-line-clamp: var(--compact-lines); -webkit-box-orient: vertical; overflow: hidden; }
+.compact .card { padding-top: 10px; padding-bottom: 10px; }
+.compact .card.clamped .card-body::after { display: none; }
+.card-expand {
+  position: absolute; right: 6px; bottom: 6px; z-index: 2; width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--surface-container-high); color: var(--on-surface-variant); box-shadow: 0 1px 2px rgba(0,0,0,.2);
+}
+.card-expand svg { width: 20px; height: 20px; }
+.card.clamped, .card.expanded { padding-bottom: 30px; }
+.lines-pick .chip { min-width: 44px; justify-content: center; padding: 0 12px; }
+.lines-pick .chip.on, .chip.on { background: var(--secondary-container); color: var(--on-secondary-container); border-color: transparent; }
+
+/* Flecha flotante: hay más notas abajo */
+.more-below {
+  position: absolute; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 4; transform: translateX(-50%);
+  width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--surface-container-high); color: var(--on-surface); box-shadow: var(--shadow);
+  animation: rebote 2.4s ease-in-out infinite;
+}
+@keyframes rebote { 0%, 100% { transform: translate(-50%, 0); } 50% { transform: translate(-50%, 4px); } }
+
+/* Link de la nota */
+.link-field {
+  width: 100%; height: 48px; padding: 0 12px; margin: 4px 0 8px; border-radius: 8px; border: 1px solid var(--outline);
+  background: var(--surface-container); color: var(--on-surface); font: inherit; font-size: 13px;
+  -webkit-user-select: all; user-select: all;
+}
+.request-row { flex-wrap: wrap; }

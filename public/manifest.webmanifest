@@ -1,7 +1,7 @@
 {
-  "name": "Notas",
-  "short_name": "Notas",
-  "description": "Notas sincronizadas entre la web y Android",
+  "name": "ANote...",
+  "short_name": "ANote...",
+  "description": "ANote...: notas sincronizadas entre la web y Android",
   "lang": "es",
   "start_url": "./",
   "scope": "./",
@@ -9,13 +9,63 @@
   "background_color": "#FEF7FF",
   "theme_color": "#6750A4",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ],
   "shortcuts": [
-    { "name": "Nueva nota", "url": "./?accion=nota", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
-    { "name": "Nueva lista", "url": "./?accion=lista", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
-    { "name": "Buscar", "url": "./?accion=buscar", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] }
+    {
+      "name": "Nueva nota",
+      "url": "./?accion=nota",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Nueva lista",
+      "url": "./?accion=lista",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "Buscar",
+      "url": "./?accion=buscar",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "application/vnd.anote+json": [
+          ".anote"
+        ]
+      }
+    }
   ]
 }
