@@ -266,3 +266,4 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
 #btn-sync.warn { color: #B3261E; }
 [data-scheme="dark"] #btn-sync.warn { color: #F2B8B5; }
 .edited { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 4px; }
+.error-detail { white-space: pre-wrap; word-break: break-word; font-size: 12px; background: var(--surface-container); padding: 12px; border-radius: 8px; user-select: text; -webkit-user-select: text; margin: 0; }

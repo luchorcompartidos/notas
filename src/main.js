@@ -6,7 +6,7 @@ import { initNative, setStatusBar, haptic, minimizeApp, isNative } from './nativ
 import { APP_VERSION, CHANGELOG_URL, getLatestRelease, isNewer, formatDate } from './version.js';
 import { applyTextDiff } from './sync.js';
 import { CloudRepo, LocalRepo } from './repo.js';
-import { fb, watchAuth, signInGoogle, signOutUser, authErrorMessage } from './firebase.js';
+import { fb, watchAuth, signInGoogle, signOutUser, authErrorMessage, errorDetail } from './firebase.js';
 
 const $ = (s) => document.querySelector(s);
 const root = document.documentElement;
@@ -494,9 +494,7 @@ $('#btn-sync').addEventListener('click', () => {
       <h2 class="sheet-title">Sin cuenta</h2>
       <p class="sheet-text">Tus notas se guardan solo en este dispositivo y no se sincronizan.</p>
       <button class="text-btn ripple" id="btn-signin">Iniciar sesión con Google</button>
-    `, (body) => body.querySelector('#btn-signin')?.addEventListener('click', async () => {
-      try { await signInGoogle(); location.reload(); } catch (e) { const m = authErrorMessage(e); if (m) snackbar(m); }
-    }));
+    `, (body) => body.querySelector('#btn-signin')?.addEventListener('click', () => { closeOverlays(); doSignIn({ reload: true }); }));
   }
 });
 
@@ -537,11 +535,29 @@ function showLogin() {
   setView('login');
 }
 
+// Inicio de sesión con Google: aviso inmediato, límite de espera y detalle del error.
+async function doSignIn({ reload = false } = {}) {
+  snackbar('Abriendo Google…');
+  let timer;
+  try {
+    await Promise.race([
+      signInGoogle(),
+      new Promise((_, rej) => { timer = setTimeout(() => rej(Object.assign(new Error('Google no respondió en 45 segundos'), { code: 'timeout' })), 45000); }),
+    ]);
+    hideSnack();
+    if (reload) location.reload();
+  } catch (e) {
+    console.error('Inicio de sesión', e);
+    const m = authErrorMessage(e);
+    if (m) snackbar(m, 'Ver detalle', () => openSheet(`<h2 class="sheet-title">Detalle del error</h2><pre class="error-detail">${esc(errorDetail(e))}</pre>`));
+    else hideSnack();
+  } finally { clearTimeout(timer); }
+}
+
 $('#btn-google').addEventListener('click', async () => {
   const b = $('#btn-google');
   b.disabled = true;
-  try { await signInGoogle(); } catch (e) { const m = authErrorMessage(e); if (m) snackbar(m); }
-  finally { b.disabled = false; }
+  try { await doSignIn(); } finally { b.disabled = false; }
 });
 $('#btn-local').addEventListener('click', startLocal);
 
