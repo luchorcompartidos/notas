@@ -17,8 +17,9 @@
 import {
   collection, doc, query, where, onSnapshot, setDoc, updateDoc, getDocs, writeBatch, deleteDoc,
   arrayUnion, arrayRemove, deleteField, getDoc, orderBy, limit, Bytes,
+  disableNetwork, enableNetwork, waitForPendingWrites,
 } from 'firebase/firestore';
-import { NoteSession } from './sync.js';
+import { NoteSession, TRANSIENT } from './sync.js';
 import { store, newId, kv } from './store.js';
 
 const emptySummary = () => ({ title: '', preview: '', checks: { done: 0, total: 0 }, thumb: null });
@@ -40,21 +41,62 @@ export class CloudRepo {
     this.serverLoaded = false;
     this.error = null;
     this.onChange = () => {};
+    this.connected = false;   // conexión real con el servidor (no la que informa el sistema)
+    this.lastServerAt = 0;
+    this.unsubs = {}; this.retries = {}; this.failed = new Set();
+  }
+
+  // Suscripción en tiempo real con reintento automático ante errores pasajeros
+  listen(name, ref, opts, next) {
+    const start = (attempt) => {
+      this.unsubs[name]?.();
+      this.retries[name] = () => start(0);
+      this.unsubs[name] = onSnapshot(ref, opts, (snap) => {
+        attempt = 0;
+        if (this.failed.delete(name) && !this.failed.size) this.error = null;
+        next(snap);
+      }, (err) => {
+        console.warn(`Sincronización (${name})`, err);
+        this.failed.add(name);
+        this.error = err;
+        this.onChange();
+        if (TRANSIENT.includes(err?.code)) setTimeout(() => start(attempt + 1), Math.min(30000, 2000 * 2 ** attempt));
+      });
+    };
+    start(0);
+  }
+
+  retryFailed() {
+    [...this.failed].forEach((name) => this.retries[name]?.());
+  }
+
+  // Reconectar ya, sin esperar los reintentos de Firestore (sincronización manual)
+  async forceReconnect() {
+    try { await disableNetwork(this.db); } catch { /* nada */ }
+    try { await enableNetwork(this.db); } catch { /* nada */ }
+    this.retryFailed();
+  }
+
+  async waitWrites(timeout = 8000) {
+    return Promise.race([
+      waitForPendingWrites(this.db).then(() => true).catch(() => false),
+      new Promise((r) => setTimeout(() => r(false), timeout)),
+    ]);
   }
 
   subscribe(cb) {
     const emit = () => cb(this.list());
     const q = query(collection(this.db, 'notes'), where('memberIds', 'array-contains', this.uid));
-    this.unsubNotes = onSnapshot(q, { includeMetadataChanges: true }, (snap) => {
+    this.listen('notas', q, { includeMetadataChanges: true }, (snap) => {
       this.notes = new Map(snap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
-      if (!snap.metadata.fromCache) this.serverLoaded = true;
-      this.error = null;
+      this.connected = !snap.metadata.fromCache;
+      if (this.connected) { this.serverLoaded = true; this.lastServerAt = Date.now(); }
       emit(); this.onChange();
-    }, (err) => { this.error = err; this.onChange(); });
-    this.unsubMeta = onSnapshot(collection(this.db, 'users', this.uid, 'meta'), (snap) => {
+    });
+    this.listen('organizacion', collection(this.db, 'users', this.uid, 'meta'), {}, (snap) => {
       this.meta = new Map(snap.docs.map((d) => [d.id, d.data()]));
       emit();
-    }, (err) => { this.error = err; this.onChange(); });
+    });
   }
 
   list() {
@@ -70,19 +112,17 @@ export class CloudRepo {
       settings: this.settings, settingsLoaded: this.settingsLoaded,
     });
     const u = this.uid;
-    this.unsubOrg = [
-      onSnapshot(collection(this.db, 'users', u, 'folders'), (s) => {
-        this.folders = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); emit();
-      }),
-      onSnapshot(collection(this.db, 'users', u, 'labels'), (s) => {
-        this.labels = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); emit();
-      }),
-      onSnapshot(doc(this.db, 'users', u, 'settings', 'prefs'), (d) => {
-        this.settings = { ...DEFAULT_SETTINGS, ...(d.data() || {}) };
-        if (!d.metadata.fromCache || d.exists()) this.settingsLoaded = true;
-        emit();
-      }),
-    ];
+    this.listen('carpetas', collection(this.db, 'users', u, 'folders'), {}, (s) => {
+      this.folders = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); emit();
+    });
+    this.listen('etiquetas', collection(this.db, 'users', u, 'labels'), {}, (s) => {
+      this.labels = new Map(s.docs.map((d) => [d.id, { id: d.id, ...d.data() }])); emit();
+    });
+    this.listen('preferencias', doc(this.db, 'users', u, 'settings', 'prefs'), {}, (d) => {
+      this.settings = { ...DEFAULT_SETTINGS, ...(d.data() || {}) };
+      if (!d.metadata.fromCache || d.exists()) this.settingsLoaded = true;
+      emit();
+    });
   }
 
   saveFolder({ id, ...data }) { this.track(setDoc(doc(this.db, 'users', this.uid, 'folders', id), data, { merge: true })); }
@@ -93,9 +133,9 @@ export class CloudRepo {
   canPurge(note) { return note.owner === this.uid; }
 
   subscribeReminders(cb) {
-    this.unsubRem = onSnapshot(collection(this.db, 'users', this.uid, 'reminders'), (s) => {
+    this.listen('recordatorios', collection(this.db, 'users', this.uid, 'reminders'), {}, (s) => {
       cb(s.docs.map((d) => ({ id: d.id, ...d.data() })));
-    }, (err) => { this.error = err; this.onChange(); });
+    });
   }
 
   /* ---------- Imágenes guardadas aparte ---------- */
@@ -143,9 +183,9 @@ export class CloudRepo {
 
   subscribeInvites(cb) {
     if (!this.profile.email) { cb([]); return; }
-    this.unsubInv = onSnapshot(query(collection(this.db, 'invites'), where('email', '==', this.profile.email)), (s) => {
+    this.listen('invitaciones', query(collection(this.db, 'invites'), where('email', '==', this.profile.email)), {}, (s) => {
       cb(s.docs.map((d) => ({ id: d.id, ...d.data() })).filter((i) => i.status === 'pending'));
-    }, (err) => console.warn('Invitaciones', err));
+    });
   }
 
   watchNoteInvites(noteId, cb) {
@@ -217,8 +257,12 @@ export class CloudRepo {
   }
 
   saveSummary(id, summary) {
-    this.track(updateDoc(doc(this.db, 'notes', id), summary));
+    this.track(updateDoc(doc(this.db, 'notes', id), { ...summary, updatedBy: this.uid, updatedByName: this.profile.name || this.profile.email }));
   }
+
+  // Agregar o quitar UNA carpeta/etiqueta: se fusiona con cambios hechos a la vez en otro dispositivo
+  addToMeta(id, field, value) { this.track(setDoc(doc(this.db, 'users', this.uid, 'meta', id), { [field]: arrayUnion(value) }, { merge: true })); }
+  removeFromMeta(id, field, value) { this.track(setDoc(doc(this.db, 'users', this.uid, 'meta', id), { [field]: arrayRemove(value) }, { merge: true })); }
 
   setMeta(id, patch) {
     this.track(setDoc(doc(this.db, 'users', this.uid, 'meta', id), patch, { merge: true }));
@@ -288,6 +332,12 @@ export class LocalRepo {
   }
 
   setMeta(id, patch) { this.saveSummary(id, patch); }
+  addToMeta(id, field, value) { const n = this.items.get(id); if (n) this.saveSummary(id, { [field]: [...new Set([...(n[field] || []), value])] }); }
+  removeFromMeta(id, field, value) { const n = this.items.get(id); if (n) this.saveSummary(id, { [field]: (n[field] || []).filter((x) => x !== value) }); }
+  get connected() { return true; }
+  async forceReconnect() {}
+  async waitWrites() { return true; }
+  retryFailed() {}
 
   async removeCompletely(id) {
     this.items.delete(id);

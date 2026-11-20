@@ -19,7 +19,7 @@ import {
 } from './reminders.js';
 import { initNative, setStatusBar, haptic, minimizeApp, isNative, listenIntents } from './native.js';
 import { APP_VERSION, CHANGELOG_URL, getLatestRelease, isNewer, formatDate } from './version.js';
-import { applyTextDiff } from './sync.js';
+import { applyTextDiff, pendingList, flushNote, lastVerified } from './sync.js';
 import { CloudRepo, LocalRepo, orgId } from './repo.js';
 import { yXmlFragmentToProsemirrorJSON } from 'y-prosemirror';
 import { fb, watchAuth, signInGoogle, signOutUser, authErrorMessage, errorDetail, reauthGoogle } from './firebase.js';
@@ -189,36 +189,80 @@ function setView(view) {
 }
 
 /* ---------- Estado de sincronización ---------- */
+// Estado general: conexión real con el servidor, cambios sin subir y errores
+function syncSummary() {
+  const repo = state.repo;
+  if (state.mode !== 'cloud' || !repo) return { kind: 'local' };
+  const pendingNotes = pendingList(state.user.uid).length;
+  const writing = (repo.pending || 0) + (state.current?.status?.pending || 0);
+  const offline = !navigator.onLine || (!repo.connected && Date.now() - (state.startedAt || 0) > 6000);
+  if (repo.error && repo.failed?.size) return { kind: 'error', code: repo.error.code, pendingNotes };
+  if (offline) return { kind: 'offline', pendingNotes, lastServerAt: repo.lastServerAt };
+  if (writing || pendingNotes) return { kind: 'syncing', pendingNotes };
+  return { kind: 'ok', lastServerAt: repo.lastServerAt };
+}
+
+const ago = (t) => {
+  if (!t) return 'nunca';
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return 'hace instantes';
+  if (m < 60) return `hace ${m} min`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `hace ${h} h`;
+  return formatDate(new Date(t).toISOString());
+};
+
 function updateSyncIcon() {
   const btn = $('#btn-sync');
-  let name = 'phone'; let label = 'Sin cuenta: notas solo en este dispositivo';
-  if (state.mode === 'cloud') {
-    const repo = state.repo;
-    const sessPending = state.current?.status?.pending || 0;
-    if (repo?.error) { name = 'error'; label = 'Error de sincronización'; }
-    else if (!navigator.onLine) { name = 'cloudOff'; label = 'Sin conexión: los cambios se suben al reconectar'; }
-    else if ((repo?.pending || 0) + sessPending > 0) { name = 'cloudUp'; label = 'Sincronizando…'; }
-    else { name = 'cloudDone'; label = 'Sincronizado'; }
-  }
+  const st = syncSummary();
+  const map = {
+    local: ['phone', 'Sin cuenta: notas solo en este dispositivo'],
+    error: ['error', `Error de sincronización (${st.code || 'desconocido'})`],
+    offline: ['cloudOff', st.pendingNotes ? `Sin conexión: ${st.pendingNotes} nota${st.pendingNotes > 1 ? 's' : ''} con cambios por subir` : 'Sin conexión con el servidor'],
+    syncing: ['cloudUp', st.pendingNotes ? `Subiendo cambios de ${st.pendingNotes} nota${st.pendingNotes > 1 ? 's' : ''}…` : 'Sincronizando…'],
+    ok: ['cloudDone', 'Todo sincronizado'],
+  };
+  const [name, label] = map[st.kind];
   btn.innerHTML = icon(name);
   btn.setAttribute('aria-label', label);
   btn.title = label;
-  btn.classList.toggle('warn', name === 'error' || name === 'cloudOff');
+  btn.classList.toggle('warn', st.kind === 'error' || st.kind === 'offline');
+
+  // Aviso visible en la lista cuando no hay conexión real o hay un error
+  const banner = $('#sync-banner');
+  if (st.kind === 'offline' || st.kind === 'error') {
+    $('#sync-banner-text').textContent = st.kind === 'error'
+      ? `Error de sincronización (${st.code || 'desconocido'}). Lo que ves puede no estar actualizado.`
+      : `Sin conexión con el servidor: lo que ves puede no estar actualizado${st.pendingNotes ? ` y hay cambios de ${st.pendingNotes} nota${st.pendingNotes > 1 ? 's' : ''} por subir` : ''}.`;
+    banner.hidden = false;
+  } else banner.hidden = true;
 }
 
+// Al pie de la nota: si lo que se ve está verificado con el servidor, y si tus cambios ya se subieron
 function updateNoteStatus() {
   const c = state.current;
   if (!c) return;
-  let text = 'Guardado en este dispositivo';
+  const el = $('#sync-state');
+  let text = 'Guardado en este dispositivo'; let warn = false;
   if (state.mode === 'cloud') {
     const st = c.status || {};
-    if (st.error) text = `Error de sincronización (${st.error.code || 'desconocido'})`;
-    else if (!navigator.onLine) text = 'Sin conexión · se sube al reconectar';
-    else if (st.pending) text = 'Sincronizando…';
-    else text = 'Sincronizado';
+    const general = syncSummary();
+    const offline = general.kind === 'offline' || (st.verified && st.fromCache && !navigator.onLine);
+    if (st.error) { text = `⚠️ Error de sincronización (${st.error.code || 'desconocido'}) · Reintentar`; warn = true; }
+    else if (offline || (st.fromCache && st.verified)) {
+      warn = true;
+      text = st.verified
+        ? `⚠️ Sin conexión: puede haber cambios de otros dispositivos que todavía no ves${st.pending ? '; los tuyos se suben al reconectar' : ''}`
+        : `⚠️ Sin conexión: estás viendo la copia de este dispositivo (verificada ${ago(st.lastServerAt || lastVerified(c.id))})`;
+    } else if (!st.verified) text = 'Verificando la última versión…';
+    else if (st.pending) text = 'Subiendo tus cambios…';
+    else text = 'Actualizada con el servidor ✓';
   }
-  $('#sync-state').textContent = text;
-  $('#edited').textContent = c.updated && !c.isNew ? ` · Editado: ${formatDate(new Date(c.updated).toISOString())}` : '';
+  el.textContent = text;
+  el.classList.toggle('warn', warn);
+  el.disabled = state.mode !== 'cloud';
+  const by = c.updatedByName && c.updatedBy && c.updatedBy !== state.user?.uid ? ` por ${c.updatedByName}` : '';
+  $('#edited').textContent = c.updated && !c.isNew ? ` · Editado ${formatDate(new Date(c.updated).toISOString())}${by}` : '';
   updateSyncIcon();
 }
 window.addEventListener('online', () => { updateSyncIcon(); updateNoteStatus(); });
@@ -298,7 +342,7 @@ function onList(list) {
     if (n) {
       Object.assign(c, {
         color: n.color, pinned: n.pinned, updated: n.updated, folders: n.folders || [], labels: n.labels || [],
-        archived: !!n.archived, trashed: !!n.trashed,
+        archived: !!n.archived, trashed: !!n.trashed, updatedBy: n.updatedBy, updatedByName: n.updatedByName,
       });
       paintEditorChrome();
     }
@@ -314,6 +358,7 @@ function onList(list) {
   scheduleReminders();
   if (pendingOpenNote && list.some((n) => n.id === pendingOpenNote)) { const id = pendingOpenNote; pendingOpenNote = null; openNote(id); }
   if (pendingIntents.length && state.repo?.serverLoaded) setTimeout(flushIntents, 50);
+  if (state.repo?.serverLoaded && !state.pendingFlushed) { state.pendingFlushed = true; setTimeout(() => flushPendingNotes(), 1500); }
 }
 
 function onOrg(org) {
@@ -585,7 +630,7 @@ async function openNote(id, { push = true, isNew = false, meta = {} } = {}) {
     color: n?.color || 'default', pinned: !!n?.pinned, updated: n?.updated,
     legacy: n?.legacy || null, seedTitle: n?.title || '',
     folders: n?.folders || [], labels: n?.labels || [], archived: !!n?.archived, trashed: !!n?.trashed,
-    template: !!n?.template,
+    template: !!n?.template, updatedBy: n?.updatedBy, updatedByName: n?.updatedByName,
     ...meta,
   };
   state.current = c;
@@ -637,6 +682,7 @@ async function openNote(id, { push = true, isNew = false, meta = {} } = {}) {
   $('#link-previews').dataset.urls = '';
   scheduleLinkPreviews(400);
   setTimeout(() => migrateInlineImages(id), 1500);
+  setTimeout(() => repairSummary(id), 2500);
   updateToolbar(editor);
 }
 
@@ -666,6 +712,12 @@ async function closeSession() {
 
 async function closeEditor() {
   if (state.view !== 'editor') return;
+  // Aviso al salir si quedaron cambios de esta nota sin subir
+  const leaving = state.current;
+  if (state.mode === 'cloud' && leaving && pendingList(state.user.uid).includes(leaving.id)
+      && (leaving.status?.pending || syncSummary().kind === 'offline')) {
+    setTimeout(() => snackbar('Hay cambios que todavía no se subieron: se suben solos cuando vuelva la conexión', 'Reintentar', () => syncNow()), 350);
+  }
   closeOverlays();
   $('#note-title').blur();
   editor?.commands.blur();
@@ -869,7 +921,7 @@ function showVersion() {
   const r = state.release;
   openSheet(`
     <h2 class="sheet-title">Notas v${esc(APP_VERSION)}</h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 5: robustez y datos · Enviar</p>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · Fase 5 · sincronización reforzada</p>
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);
@@ -880,13 +932,23 @@ $('#btn-version').addEventListener('click', showVersion);
 $('#btn-sync').addEventListener('click', () => {
   if (state.mode === 'cloud') {
     const u = state.user;
+    const st = syncSummary();
     const label = $('#btn-sync').getAttribute('aria-label');
+    const fine = st.kind === 'ok';
     openSheet(`
-      <h2 class="sheet-title">Tu cuenta</h2>
+      <h2 class="sheet-title">Tu cuenta y sincronización</h2>
       <p class="sheet-text"><strong>${esc(u.displayName || '')}</strong><br>${esc(u.email || '')}</p>
-      <p class="sheet-text">Estado: ${esc(label)}</p>
-      <button class="text-btn ripple" id="btn-signout">Cerrar sesión</button>
-    `, (body) => body.querySelector('#btn-signout').addEventListener('click', doSignOut));
+      <div class="sync-lines">
+        <p>${icon(fine ? 'cloudDone' : st.kind === 'syncing' ? 'cloudUp' : 'cloudOff')}<span>${esc(label)}</span></p>
+        <p>${icon('history')}<span>Última verificación con el servidor: ${esc(ago(state.repo.lastServerAt))}</span></p>
+        ${st.pendingNotes ? `<p>${icon('note')}<span>${st.pendingNotes} nota${st.pendingNotes > 1 ? 's' : ''} con cambios de este dispositivo por subir</span></p>` : ''}
+      </div>
+      <div class="sheet-actions"><button class="text-btn ripple" id="btn-signout">Cerrar sesión</button><span class="spacer"></span>
+        ${fine ? '' : '<button class="filled-btn ripple" id="btn-sync-now">Reintentar ahora</button>'}</div>
+    `, (body) => {
+      body.querySelector('#btn-signout').addEventListener('click', doSignOut);
+      body.querySelector('#btn-sync-now')?.addEventListener('click', () => { closeOverlays(); syncNow(); });
+    });
   } else {
     openSheet(`
       <h2 class="sheet-title">Sin cuenta</h2>
@@ -906,6 +968,7 @@ async function doSignOut() {
 
 /* ---------- Modos: con cuenta (nube) o sin cuenta (local) ---------- */
 function startRepo(repo, mode) {
+  state.startedAt = Date.now();
   state.repo = repo;
   state.mode = mode;
   state.firstList = true;
@@ -1156,8 +1219,7 @@ async function deleteFolder(id) {
   });
   if (!r) return;
   state.notes.forEach((n) => {
-    const keep = (n.folders || []).filter((x) => !ids.includes(x));
-    if (keep.length !== (n.folders || []).length) state.repo.setMeta(n.id, { folders: keep });
+    (n.folders || []).filter((x) => ids.includes(x)).forEach((x) => state.repo.removeFromMeta(n.id, 'folders', x));
   });
   ids.forEach((x) => state.repo.deleteFolder(x));
   if (state.filter.kind === 'folder' && ids.includes(state.filter.id)) setFilter({ kind: 'notes' });
@@ -1185,7 +1247,7 @@ async function deleteLabel(id) {
   const r = await openDialog({ title: `¿Eliminar la etiqueta «${l.name}»?`, text: 'Se quita de todas las notas. Las notas no se borran.', ok: 'Eliminar', danger: true });
   if (!r) return;
   state.notes.forEach((n) => {
-    if ((n.labels || []).includes(id)) state.repo.setMeta(n.id, { labels: n.labels.filter((x) => x !== id) });
+    if ((n.labels || []).includes(id)) state.repo.removeFromMeta(n.id, 'labels', id);
   });
   state.repo.deleteLabel(id);
   if (state.filter.kind === 'label' && state.filter.id === id) setFilter({ kind: 'notes' });
@@ -1212,7 +1274,8 @@ function openPicker(ids, field) {
         const arr = [...set];
         n[field] = arr; // reflejo inmediato hasta que llegue la sincronización
         if (state.current?.id === n.id) state.current[field] = arr;
-        state.repo.setMeta(n.id, { [field]: arr });
+        // Se agrega o quita solo esa carpeta/etiqueta: no pisa cambios hechos en otro dispositivo
+        if (add) state.repo.addToMeta(n.id, field, id); else state.repo.removeFromMeta(n.id, field, id);
       }
     });
   };
@@ -1327,8 +1390,7 @@ async function deleteForever(ids) {
 
 function removeFromFolder(ids, folderId) {
   ids.forEach((id) => {
-    const n = noteById(id);
-    if (n) state.repo.setMeta(id, { folders: (n.folders || []).filter((x) => x !== folderId) });
+    if (noteById(id)) state.repo.removeFromMeta(id, 'folders', folderId);
   });
   snackbar(`Quitada${ids.length > 1 ? 's' : ''} de «${folderById(folderId)?.name || 'la carpeta'}»`);
 }
@@ -2522,6 +2584,105 @@ async function setLocked(ids, value) {
   if (value && state.current && ids.includes(state.current.id)) goBack();
   snackbar(value ? (ids.length > 1 ? 'Notas bloqueadas' : 'Nota bloqueada') : 'Bloqueo quitado');
 }
+
+/* ---------- Sincronización: contingencias y sincronización manual ---------- */
+// Sube los cambios que quedaron en este dispositivo en notas que no están abiertas
+let flushingPending = false;
+async function flushPendingNotes() {
+  if (state.mode !== 'cloud' || flushingPending) return 0;
+  flushingPending = true;
+  try {
+    const ids = pendingList(state.user.uid).filter((id) => id !== state.current?.id);
+    for (const id of ids) {
+      if (!state.notes.some((n) => n.id === id)) continue; // nota borrada o sin acceso
+      await flushNote(fb().db, state.user.uid, id, 15000);
+    }
+  } finally { flushingPending = false; updateSyncIcon(); }
+  return pendingList(state.user.uid).length;
+}
+
+let syncing = false;
+async function syncNow({ quiet = false } = {}) {
+  if (state.mode !== 'cloud') { if (!quiet) snackbar('Sin cuenta: las notas quedan solo en este dispositivo'); return; }
+  if (syncing) return;
+  syncing = true;
+  if (!quiet) snackbar('Sincronizando…');
+  try {
+    await state.repo.forceReconnect();           // reconecta ya, sin esperar los reintentos
+    state.current?.session?.retry();               // la nota abierta vuelve a pedir la versión del servidor
+    await state.repo.waitWrites(8000);             // espera que se confirme lo que estaba en cola
+    await flushPendingNotes();                     // sube cambios que quedaron en otras notas
+    // Espera unos segundos la confirmación de conexión real
+    const t0 = Date.now();
+    while (!state.repo.connected && Date.now() - t0 < 6000) await new Promise((r) => setTimeout(r, 300));
+    const st = syncSummary();
+    if (!quiet) {
+      if (st.kind === 'ok') snackbar('Todo sincronizado ✓');
+      else if (st.kind === 'offline') snackbar(`Sin conexión${st.pendingNotes ? `: quedan ${st.pendingNotes} nota${st.pendingNotes > 1 ? 's' : ''} con cambios por subir` : ''}. Se reintenta solo al volver la conexión.`);
+      else if (st.kind === 'error') snackbar(`Sigue el error de sincronización (${st.code || 'desconocido'})`);
+      else snackbar('Sincronizando… (puede tardar unos segundos)');
+    }
+  } catch (e) {
+    if (!quiet) snackbar(`No se pudo sincronizar (${e?.message || 'error'})`);
+  } finally {
+    syncing = false;
+    updateSyncIcon(); updateNoteStatus();
+  }
+}
+
+// Si la tarjeta de la lista quedó con un resumen viejo, se corrige al abrir la nota
+async function repairSummary(id) {
+  const c = state.current;
+  if (!c || c.id !== id || !editor || !c.status?.verified || myRole(noteById(id)) === 'view') return;
+  const n = noteById(id);
+  if (!n || n.trashed) return;
+  const s = summarize(editor.getJSON(), editor.getText({ blockSeparator: '\n' }));
+  const title = $('#note-title').value;
+  const same = (n.title || '') === title && (n.preview || '') === s.preview
+    && (n.checks?.done || 0) === s.checks.done && (n.checks?.total || 0) === s.checks.total;
+  if (!same) { c.dirty = true; await saveSummaryNow(); }
+}
+
+$('#sync-banner-action').addEventListener('click', () => syncNow());
+$('#sync-state').addEventListener('click', () => {
+  if (state.mode !== 'cloud') return;
+  const st = state.current?.status || {};
+  if (st.error || st.fromCache || !st.verified || st.pending) syncNow();
+  else snackbar('La nota está actualizada con el servidor ✓');
+});
+window.addEventListener('pendingchange', () => updateSyncIcon());
+window.addEventListener('online', () => { setTimeout(() => syncNow({ quiet: true }), 1000); });
+setInterval(() => { if (state.mode === 'cloud') { updateSyncIcon(); updateNoteStatus(); } }, 5000);
+
+// Deslizar hacia abajo en la lista: sincronizar ahora
+(() => {
+  const sc = $('#list-scroll');
+  const ind = $('#pull-indicator');
+  let startY = null; let dist = 0;
+  sc.addEventListener('touchstart', (e) => {
+    startY = sc.scrollTop <= 0 && !state.selection.size ? e.touches[0].clientY : null; dist = 0;
+  }, { passive: true });
+  sc.addEventListener('touchmove', (e) => {
+    if (startY === null) return;
+    dist = Math.max(0, Math.min(120, (e.touches[0].clientY - startY) * 0.5));
+    ind.style.setProperty('--pull', `${dist}px`);
+    ind.classList.toggle('ready', dist >= 64);
+    ind.classList.toggle('show', dist > 4);
+  }, { passive: true });
+  sc.addEventListener('touchend', async () => {
+    if (startY === null) return;
+    startY = null;
+    const go = dist >= 64;
+    ind.classList.remove('ready');
+    if (!go) { ind.classList.remove('show'); ind.style.setProperty('--pull', '0px'); return; }
+    haptic();
+    ind.classList.add('spinning');
+    ind.style.setProperty('--pull', '56px');
+    await syncNow();
+    ind.classList.remove('spinning', 'show');
+    ind.style.setProperty('--pull', '0px');
+  });
+})();
 
 /* ---------- Inicio ---------- */
 function init() {

@@ -19,6 +19,8 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | 3 | v0.0.10 | Compartir por email (puede editar / solo puede ver), «Compartidas conmigo», edición simultánea, quitar acceso, salir de una nota |
 | 4 | v0.0.11 | «Compartir con…» desde otras apps, widget de nota rápida, ícono propio, accesos directos, web instalable que abre sin conexión, vista previa de links |
 | 5 | v0.0.12 | Imágenes guardadas aparte (sin límite por nota), historial de versiones, exportar (PDF, .docx, .md, .txt, .json) e importar (.json, .md, .txt, .docx, .pdf, .html), notas bloqueadas con huella |
+| — | v0.0.13 | Enviar a WhatsApp (texto con formato, imágenes, PDF/Word/txt como adjunto) |
+| — | v0.0.14 | Sincronización reforzada: estado de verificación por nota, conexión real, cola de cambios pendientes, reintentos, «tirar para actualizar» y «Reintentar ahora» |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
 

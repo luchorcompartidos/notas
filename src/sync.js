@@ -13,6 +13,23 @@ import { IndexeddbPersistence } from 'y-indexeddb';
 import { collection, onSnapshot, addDoc, writeBatch, doc, Bytes, serverTimestamp } from 'firebase/firestore';
 
 const REMOTE = Symbol('remote');
+// Errores pasajeros (red, servidor ocupado): se reintenta solo
+export const TRANSIENT = ['unavailable', 'deadline-exceeded', 'internal', 'resource-exhausted', 'aborted', 'cancelled', 'unknown'];
+
+/* ---------- Notas con cambios de este dispositivo que todavía no llegaron al servidor ---------- */
+const pendKey = (uid) => `notas-pendientes-${uid}`;
+export function pendingList(uid) {
+  try { return JSON.parse(localStorage.getItem(pendKey(uid))) || []; } catch { return []; }
+}
+function setPending(uid, id, on) {
+  if (!uid) return;
+  const set = new Set(pendingList(uid));
+  if (on === set.has(id)) return;
+  if (on) set.add(id); else set.delete(id);
+  localStorage.setItem(pendKey(uid), JSON.stringify([...set]));
+  window.dispatchEvent(new CustomEvent('pendingchange'));
+}
+export const lastVerified = (id) => Number(localStorage.getItem(`notas-verif-${id}`) || 0);
 const COMPACT_AFTER = 40;           // documentos de cambios antes de compactar
 const MAX_DOC_BYTES = 900 * 1024;   // Firestore admite hasta 1 MiB por documento
 
@@ -30,10 +47,14 @@ export class NoteSession {
     this.seen = new Set();
     this.error = null;
     this.closed = false;
+    this.verified = false;   // ya recibió la versión del servidor en esta apertura
+    this.fromCache = true;   // lo último que se ve viene de la copia local (sin conexión con el servidor)
+    this.lastServerAt = lastVerified(noteId);
     this.idb = new IndexeddbPersistence(`notas-${uid || 'local'}-${noteId}`, this.ydoc);
     this._onUpdate = (update, origin) => {
       if (!this.db || origin === REMOTE || origin === this.idb) return;
       this.queue.push(update);
+      setPending(this.uid, this.id, true); // marcado al instante: si la app se cierra, se sube al volver
       clearTimeout(this.timer);
       this.timer = setTimeout(() => this.flush(), 700);
       this.emit();
@@ -59,8 +80,16 @@ export class NoteSession {
   listen(attempt) {
     if (this.closed) return;
     const col = collection(this.db, 'notes', this.id, 'updates');
+    this.unsub?.();
     this.unsub = onSnapshot(col, { includeMetadataChanges: true }, (snap) => {
       this.error = null;
+      attempt = 0;
+      this.fromCache = snap.metadata.fromCache;
+      if (!snap.metadata.fromCache) {
+        this.verified = true;
+        this.lastServerAt = Date.now();
+        localStorage.setItem(`notas-verif-${this.id}`, String(this.lastServerAt));
+      }
       snap.docChanges().forEach((ch) => {
         if (ch.type === 'removed') { this.seen.delete(ch.doc.id); return; }
         if (this.seen.has(ch.doc.id)) return;
@@ -81,19 +110,49 @@ export class NoteSession {
     }, (err) => {
       // Una nota recién creada puede no existir todavía en el servidor: reintentar.
       this._resolveFirst?.();
+      this.fromCache = true;
       if (err?.code === 'permission-denied' && attempt < 6) {
         setTimeout(() => this.listen(attempt + 1), 1500);
         return;
       }
       this.error = err;
       this.emit();
+      if (err?.code === 'permission-denied' || err?.code === 'not-found') {
+        setPending(this.uid, this.id, false); // sin acceso a la nota: no queda nada por subir
+        return;
+      }
+      // Error pasajero: reintento automático cada vez más espaciado (2 s … 30 s)
+      if (TRANSIENT.includes(err?.code)) this.retryTimer = setTimeout(() => this.listen(attempt + 1), Math.min(30000, 2000 * 2 ** attempt));
+    });
+  }
+
+  // Volver a pedir la versión del servidor ahora (sincronización manual)
+  retry() {
+    if (!this.db || this.closed) return;
+    clearTimeout(this.retryTimer);
+    this.error = null;
+    this.flush();
+    this.listen(0);
+    this.emit();
+  }
+
+  // Espera a que esté verificada con el servidor y sin cambios pendientes (o hasta el tiempo límite)
+  settled(timeout = 15000) {
+    const t0 = Date.now();
+    return new Promise((resolve) => {
+      const check = () => {
+        const ok = this.verified && !this.pending && !this.queue.length;
+        if (ok || this.error?.code === 'permission-denied' || Date.now() - t0 > timeout) resolve(ok);
+        else setTimeout(check, 300);
+      };
+      check();
     });
   }
 
   // Sube todo lo que tenemos localmente y el servidor todavía no.
   reconcile() {
     const diff = Y.encodeStateAsUpdate(this.ydoc, Y.encodeStateVector(this.remoteDoc));
-    if (diff.length > 2) { this.queue.push(diff); this.flush(); }
+    if (diff.length > 2) { this.queue.push(diff); this.flush(); } else if (!this.pending && !this.queue.length) setPending(this.uid, this.id, false);
   }
 
   flush() {
@@ -108,7 +167,9 @@ export class NoteSession {
       by: this.uid,
       at: serverTimestamp(),
     }).then(() => {
-      this.pending--; this.emit();
+      this.pending--;
+      if (!this.pending && !this.queue.length) setPending(this.uid, this.id, false);
+      this.emit();
     }).catch((e) => {
       this.pending--; this.error = e; this.emit();
       // Lo local queda en IndexedDB: se vuelve a subir en la próxima apertura (reconcile).
@@ -131,12 +192,16 @@ export class NoteSession {
   snapshot() { return Y.encodeStateAsUpdate(this.ydoc); }
 
   emit() {
-    this.onStatus({ pending: this.pending + (this.queue.length ? 1 : 0), error: this.error });
+    this.onStatus({
+      pending: this.pending + (this.queue.length ? 1 : 0), error: this.error,
+      verified: this.verified, fromCache: this.fromCache, lastServerAt: this.lastServerAt,
+    });
   }
 
   destroy() {
     this.flush();
     this.closed = true;
+    clearTimeout(this.retryTimer);
     this.unsub?.();
     this.ydoc.off('update', this._onUpdate);
     try { this.idb.destroy(); } catch { /* nada */ }
@@ -158,4 +223,15 @@ export function applyTextDiff(ytext, value) {
     const ins = value.slice(s, value.length - e);
     if (ins) ytext.insert(s, ins);
   });
+}
+
+// Sube los cambios pendientes de una nota sin abrirla en pantalla
+export async function flushNote(db, uid, id, timeout = 15000) {
+  const s = new NoteSession(id, { db, uid });
+  try {
+    await s.ready();
+    const ok = await s.settled(timeout);
+    if (ok) setPending(uid, id, false);
+    return ok;
+  } finally { s.destroy(); }
 }

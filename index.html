@@ -51,6 +51,10 @@
         <span class="spacer"></span>
         <div id="select-actions" class="select-actions"></div>
       </header>
+      <div class="update-banner sync-banner" id="sync-banner" hidden>
+        <span id="sync-banner-text">Sin conexión con el servidor: lo que ves puede no estar actualizado.</span>
+        <button class="text-btn ripple" id="sync-banner-action">Reintentar</button>
+      </div>
       <div class="update-banner" id="invites-banner" hidden>
         <span id="invites-text"></span>
         <button class="text-btn ripple" id="invites-action">Ver</button>
@@ -59,6 +63,7 @@
         <span id="update-text">Hay una versión nueva.</span>
         <button class="text-btn ripple" id="update-action">Recargar</button>
       </div>
+      <div class="pull-indicator" id="pull-indicator" aria-hidden="true"><span class="pull-spinner"></span></div>
       <main class="scroll" id="list-scroll">
         <p class="view-note" id="view-note" hidden></p>
         <div class="chips-row" id="folder-children" hidden></div>
@@ -100,7 +105,7 @@
           <div class="chips-row note-chips" id="note-chips"></div>
           <div id="editor"></div>
           <div class="link-previews" id="link-previews"></div>
-          <p class="edited"><span id="sync-state"></span><span id="edited"></span></p>
+          <p class="edited"><button class="sync-state" id="sync-state" type="button"></button><span id="edited"></span></p>
         </div>
       </main>
       <nav class="toolbar" id="toolbar" aria-label="Formato">
