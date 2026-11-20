@@ -39,15 +39,20 @@ export async function signInGoogle() {
   if (native) {
     const { FirebaseAuthentication } = await nativeAuthModule();
     let res;
-    const t0 = Date.now();
     try {
       // Método nuevo de Android (Credential Manager)
       res = await FirebaseAuthentication.signInWithGoogle({ useCredentialManager: true });
-    } catch (e) {
-      // Si falló enseguida, sin llegar a mostrar la ventana: probar el método clásico de Google.
-      if (Date.now() - t0 > 2500) throw e;
-      console.warn('Credential Manager falló, se prueba el método clásico', e);
-      res = await FirebaseAuthentication.signInWithGoogle({ useCredentialManager: false });
+    } catch (e1) {
+      // Si la persona canceló, no insistir.
+      if (/cancel/i.test(String(e1?.message || '')) && !/no credential/i.test(String(e1?.message || ''))) throw e1;
+      // Cualquier otro rechazo (p. ej. "No credentials available"): método clásico con selector de cuentas.
+      console.warn('Credential Manager falló, se prueba el método clásico', e1);
+      try {
+        res = await FirebaseAuthentication.signInWithGoogle({ useCredentialManager: false });
+      } catch (e2) {
+        e2.message = `${e2?.message || e2} (antes, método nuevo: ${e1?.message || e1})`;
+        throw e2;
+      }
     }
     const idToken = res?.credential?.idToken;
     if (!idToken) throw Object.assign(new Error('Google no devolvió el token'), { code: 'auth/no-id-token' });
