@@ -23,6 +23,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | — | v0.0.14 | Sincronización reforzada: estado de verificación por nota, conexión real, cola de cambios pendientes, reintentos, «tirar para actualizar» y «Reintentar ahora» |
 | — | v0.1.0 | Marca ANote..., vista compacta (1 a 5 líneas) y estándar con límite de 1/3, contraer/expandir, flecha de «más notas», formato .anote, «Copiar (o Enviar) Link» y pedidos de acceso al dueño |
 | — | v0.1.1 | Ocultar notas de la pantalla principal (listado «Notas ocultables» con selección múltiple, Quitar del listado y Restaurar listado; marca [Oculta] y filtro «Excluir ocultas» en la búsqueda) y «Estadísticas e Info de la nota» |
+| — | v0.1.2 | «Título automático» (menú lateral): a una nota nueva que se cierra sin título se le pone la primera frase, un prefijo configurable o prefijo + primera frase |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
 

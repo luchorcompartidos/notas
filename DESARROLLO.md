@@ -8,7 +8,7 @@ Para retomar el trabajo en un chat nuevo sin volver a investigar todo. Decí "se
 
 ## Estado
 
-La tabla completa de versiones está en el `README.md`. Última: **v0.1.1**.
+La tabla completa de versiones está en el `README.md`. Última: **v0.1.2**.
 
 | Versión | Contenido |
 |---|---|
@@ -18,6 +18,7 @@ La tabla completa de versiones está en el `README.md`. Última: **v0.1.1**.
 | v0.0.14 | Sincronización reforzada (estado por nota, cola de pendientes, reintentos, sincronización manual, tirar para actualizar) |
 | v0.1.0 | Marca "ANote...", vista compacta y estándar, contraer/expandir, flecha de "más notas", formato `.anote`, "Copiar (o Enviar) Link", pedidos de acceso |
 | v0.1.1 | Ocultar notas (listado "Notas ocultables") y "Estadísticas e Info de la nota" |
+| v0.1.2 | Título automático para notas nuevas sin título |
 
 **Sin etapas nuevas acordadas.** Pendiente a evaluar más adelante:
 - **App Links** (que el link de una nota abra la app en vez de la web). Requiere que el usuario cree el repo vacío `luchorcompartidos.github.io` (Claude no puede crear repos). Después hay que subir ahí `.well-known/assetlinks.json` con el paquete `io.github.luchorcompartidos.notas` y el SHA-256 de la firma: `F3:CC:EE:75:71:9A:9E:A6:13:FD:C2:0E:30:33:49:48:C3:1A:0C:67:77:60:B4:97:B5:C5:9C:3F:E3:AD:3B:D9`. Además hay que agregar en `patch-android.py` el intent-filter `autoVerify` para `https://luchorcompartidos.github.io/notas/`.
@@ -34,6 +35,11 @@ La tabla completa de versiones está en el `README.md`. Última: **v0.1.1**.
   - La búsqueda las muestra por defecto y tiene el filtro "Excluir ocultas".
   - El listado "Notas ocultables" incluye por defecto **todas** las notas, cada una como Oculta o Visible.
   - "Quitar del listado" deja la nota visible y la saca del listado (`unlisted: true`); "Restaurar listado" vuelve a incluir todas.
+- **Título automático** (v0.1.2), en el menú lateral, debajo de "Plazo de la papelera":
+  - Se aplica **solo** a una nota nueva (`c.isNew`) que se cierra sin título y con contenido (en `closeSession`). Las notas existentes no cambian.
+  - Modos: primera frase, prefijo, o prefijo + primera frase (se concatenan tal cual, respetando los espacios del final del prefijo).
+  - Primera frase: hasta el primer punto seguido de espacio o fin, o el primer salto de línea, lo que aparezca antes; sin tope de largo (`firstPhrase`).
+  - Se guarda en `settings/prefs`: `autoTitleOn`, `autoTitleMode` (`phrase`/`prefix`/`both`), `autoTitlePrefix`. Sin cambio de reglas.
 - **Links de nota:** por ahora abren la web (`#/nota/<id>?o=<dueño>`). Si quien abre el link no tiene acceso, puede "Solicitar acceso" y el dueño lo aprueba o lo rechaza.
 - **Versiones:** cada pedido define el tipo de Release (la mayoría Patch; la v0.1.0 fue Minor). Si hay otras preguntas pendientes, el tipo de Release se pregunta al final; si no, se avanza con Patch y se avisa el número.
 

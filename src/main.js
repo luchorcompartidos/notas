@@ -714,6 +714,11 @@ async function closeSession() {
     const title = $('#note-title').value;
     const s = summarize(editor.getJSON(), editor.getText({ blockSeparator: '\n' }));
     empty = !title.trim() && !s.preview && !s.thumb && !s.checks.total;
+    // Título automático: nota nueva que se cierra sin título (si la opción está activada)
+    if (c.isNew && !empty && !title.trim() && c.session && myRole(noteById(c.id)) !== 'view') {
+      const auto = autoTitleFor(s.text);
+      if (auto) { $('#note-title').value = auto; applyTextDiff(c.session.titleText, auto); c.dirty = true; }
+    }
     if (c.dirty && !(empty && c.isNew)) await saveSummaryNow();
     editor.destroy();
     editor = null;
@@ -946,7 +951,7 @@ function showVersion() {
   const r = state.release;
   openSheet(`
     <h2 class="sheet-title">${BRAND} <small class="ver">v${esc(APP_VERSION)}</small></h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · notas ocultas y estadísticas de la nota</p>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · título automático para notas sin título</p>
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);
@@ -1200,6 +1205,7 @@ function renderDrawer() {
     ${item('trash', null, icon('delete'), `Papelera (${count((n) => n.trashed)})`)}
     <div class="drawer-divider"></div>
     <div class="drawer-item"><button class="drawer-link ripple" id="drawer-settings">${icon('settings')}<span class="drawer-label">Plazo de la papelera</span></button></div>
+    <div class="drawer-item"><button class="drawer-link ripple" id="drawer-autotitle">${icon('title')}<span class="drawer-label">Título automático${state.org.settings.autoTitleOn ? ' (activado)' : ''}</span></button></div>
   `;
   $('#drawer-body').querySelectorAll('[data-kind]').forEach((b) => b.addEventListener('click', () => {
     setFilter(b.dataset.id ? { kind: b.dataset.kind, id: b.dataset.id } : { kind: b.dataset.kind });
@@ -1215,6 +1221,7 @@ function renderDrawer() {
   $('#drawer-new-label').addEventListener('click', () => newLabel());
   $('#drawer-hidden').addEventListener('click', () => { closeOverlays(); showHiddenManager(); });
   $('#drawer-settings').addEventListener('click', () => { closeOverlays(); showTrashSettings(); });
+  $('#drawer-autotitle').addEventListener('click', () => { closeOverlays(); showAutoTitleSettings(); });
 }
 
 /* ---------- Carpetas ---------- */
@@ -1781,6 +1788,80 @@ function showTrashSettings() {
       closeOverlays();
       snackbar('Plazo de la papelera guardado');
     }));
+  });
+}
+
+/* ---------- Título automático para notas nuevas sin título ---------- */
+const AUTO_TITLE_MODES = [
+  ['phrase', 'Primera frase de la nota'],
+  ['prefix', 'Prefijo'],
+  ['both', 'Prefijo + primera frase'],
+];
+
+// Primera frase: hasta el primer punto (seguido de espacio o fin del texto) o el primer salto de línea, lo que aparezca antes.
+// Un punto pegado a otro carácter (3.5, www.sitio.com) no corta la frase.
+function firstPhrase(text) {
+  const t = String(text || '').replace(/^\s+/, '');
+  if (!t) return '';
+  let cut = t.length;
+  const nl = t.indexOf('\n');
+  if (nl >= 0) cut = nl;
+  const dot = t.search(/\.(?=\s|$)/);
+  if (dot >= 0 && dot < cut) cut = dot;
+  return t.slice(0, cut).replace(/\.+$/, '').trim();
+}
+
+function buildAutoTitle(mode, prefix, text) {
+  const phrase = firstPhrase(text);
+  if (mode === 'prefix') return (prefix || '').trim();
+  if (mode === 'both') return ((prefix || '') + phrase).trim();
+  return phrase;
+}
+
+function autoTitleFor(text) {
+  const st = state.org.settings;
+  if (!st.autoTitleOn) return '';
+  return buildAutoTitle(st.autoTitleMode || 'phrase', st.autoTitlePrefix || '', text);
+}
+
+function showAutoTitleSettings() {
+  const st = state.org.settings;
+  const cur = { on: !!st.autoTitleOn, mode: st.autoTitleMode || 'phrase', prefix: st.autoTitlePrefix ?? '' };
+  const save = (patch) => { state.repo.saveSettings(patch); Object.assign(state.org.settings, patch); };
+  openSheet(`<h2 class="sheet-title">Título automático</h2>
+    <p class="sheet-text">Si creás una nota y la cerrás sin título, se le pone uno automáticamente. Las notas que ya existen no cambian.</p>
+    <button class="picker-item ripple at-switch" id="at-on" role="switch" aria-checked="${cur.on}"><span>Activar título automático</span><span class="spacer"></span><span class="switch${cur.on ? ' on' : ''}"></span></button>
+    <div id="at-opts" class="at-opts${cur.on ? '' : ' off'}">
+      <div class="picker-list">${AUTO_TITLE_MODES.map(([k, label]) => `<button class="picker-item ripple" data-mode="${k}"><span class="radio${k === cur.mode ? ' on' : ''}"></span><span>${label}</span></button>`).join('')}</div>
+      <label class="field" id="at-prefix-field"><span>Prefijo (se respetan los espacios del final)</span><input type="text" id="at-prefix" value="${esc(cur.prefix)}" placeholder="Ej.: Idea - " autocomplete="off"></label>
+      <p class="sheet-text">La primera frase llega hasta el primer punto o el primer salto de línea, lo que aparezca antes.</p>
+      <p class="sheet-text" id="at-example"></p>
+    </div>`, (body) => {
+    const paint = () => {
+      body.querySelector('#at-on').setAttribute('aria-checked', String(cur.on));
+      body.querySelector('.switch').classList.toggle('on', cur.on);
+      body.querySelector('#at-opts').classList.toggle('off', !cur.on);
+      body.querySelectorAll('[data-mode]').forEach((b) => b.querySelector('.radio').classList.toggle('on', b.dataset.mode === cur.mode));
+      body.querySelector('#at-prefix-field').classList.toggle('off', cur.mode === 'phrase');
+      const ex = buildAutoTitle(cur.mode, cur.prefix, 'Comprar pan y leche. Pasar por la farmacia');
+      body.querySelector('#at-example').innerHTML = `Ejemplo con «Comprar pan y leche. Pasar por la farmacia» → <strong>${ex ? esc(ex) : '(sin título)'}</strong>`;
+    };
+    body.querySelector('#at-on').addEventListener('click', () => {
+      cur.on = !cur.on; save({ autoTitleOn: cur.on }); paint(); renderDrawer();
+      snackbar(cur.on ? 'Título automático activado' : 'Título automático desactivado');
+    });
+    body.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => {
+      cur.mode = b.dataset.mode; save({ autoTitleMode: cur.mode }); paint();
+      if (cur.mode !== 'phrase' && !cur.prefix.trim()) body.querySelector('#at-prefix').focus();
+    }));
+    let t = null;
+    const input = body.querySelector('#at-prefix');
+    input.addEventListener('input', () => {
+      cur.prefix = input.value; paint();
+      clearTimeout(t); t = setTimeout(() => save({ autoTitlePrefix: cur.prefix }), 500);
+    });
+    input.addEventListener('change', () => { clearTimeout(t); save({ autoTitlePrefix: input.value }); });
+    paint();
   });
 }
 

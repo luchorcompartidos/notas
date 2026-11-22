@@ -589,3 +589,11 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
 .stats .stats-sec th { padding-top: 14px; color: var(--primary); font-weight: 500; font-size: 13px; border-bottom: none; }
 .stats-tip { font-size: 12px; margin-top: 10px; }
 .hm-row .rem-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+
+/* Título automático: interruptor y opciones */
+.switch { position: relative; width: 52px; height: 32px; border-radius: 16px; border: 2px solid var(--outline); box-sizing: border-box; flex: 0 0 auto; transition: background .15s, border-color .15s; overflow: visible !important; }
+.switch::after { content: ""; position: absolute; top: 50%; left: 6px; width: 16px; height: 16px; border-radius: 50%; background: var(--outline); transform: translateY(-50%); transition: all .15s; }
+.switch.on { background: var(--primary); border-color: var(--primary); }
+.switch.on::after { left: 22px; width: 24px; height: 24px; background: var(--on-primary); }
+.at-switch { margin: 0 -8px 8px; width: calc(100% + 16px); }
+.at-opts.off, .at-opts .field.off { opacity: .45; pointer-events: none; }

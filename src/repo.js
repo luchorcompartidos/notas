@@ -7,7 +7,7 @@
  *                           carpetas y etiquetas de la nota
  *   users/{uid}/folders/* → carpetas (con parentId para subcarpetas)
  *   users/{uid}/labels/*  → etiquetas (nombre y color)
- *   users/{uid}/settings/prefs → preferencias (plazo de la papelera, orden)
+ *   users/{uid}/settings/prefs → preferencias (plazo de la papelera, orden, título automático)
  *   users/{uid}/reminders/* → recordatorios (por nota o por casilla), de cada usuario
  *   invites/{noteId}_{email} → invitaciones para compartir una nota (rol: edit | view)
  *   notes/{id}/images/*   → imágenes de la nota, guardadas aparte (la nota solo lleva "img:<nota>/<imagen>")
@@ -23,7 +23,7 @@ import { NoteSession, TRANSIENT } from './sync.js';
 import { store, newId, kv } from './store.js';
 
 const emptySummary = () => ({ title: '', preview: '', checks: { done: 0, total: 0 }, thumb: null });
-const DEFAULT_SETTINGS = { trashDays: 30 };
+const DEFAULT_SETTINGS = { trashDays: 30, autoTitleOn: false, autoTitleMode: 'phrase', autoTitlePrefix: '' };
 const META_DEFAULTS = {
   color: 'default', pinned: false, archived: false, trashed: false, trashedAt: null, folders: [], labels: [],
   hidden: false, unlisted: false, // Ocultar: personal de cada usuario
