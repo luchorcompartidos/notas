@@ -600,6 +600,8 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
 
 /* ===== Tablas ===== */
 .ProseMirror .tableWrapper { overflow-x: auto; margin: 8px 0; -webkit-overflow-scrolling: touch; }
+/* Tabla al principio de la nota: más espacio arriba para poder tocar entre el título y la tabla (crea un renglón). */
+.ProseMirror > .tableWrapper:first-child { margin-top: 24px; }
 .ProseMirror table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 0; }
 .ProseMirror > table, .version-preview .ProseMirror table { display: block; overflow-x: auto; margin: 8px 0; }
 .ProseMirror td, .ProseMirror th {

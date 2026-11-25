@@ -7,7 +7,7 @@ import {
   tableContext, setCellsAttrs, insertTable, runTableCommand, ALIGN_H, ALIGN_V,
   tableSizes, setColumnWidth, setColumnsMode, setRowHeight, setRowsMode,
   copyTablePart, insertCopied, duplicateTablePart, getTableClip, CELL_BG, sortTable, placeCursorAt,
-  needsTrailingParagraph, writeAtEnd,
+  needsTrailingParagraph, writeAtEnd, needsLeadingParagraph, writeAtStart,
 } from './editor.js';
 import * as Y from 'yjs';
 import { generateHTML, generateJSON } from '@tiptap/core';
@@ -1151,13 +1151,18 @@ function bindCellPress() {
 function bindEditorUi() {
   bindTableBar();
   bindCellPress();
-  // Tocar debajo de una tabla (o imagen) que está al final de la nota: renglón nuevo con el cursor y el teclado.
+  // Tocar debajo de una tabla (o imagen) que está al final de la nota, o entre el título y una que está al principio:
+  // renglón nuevo con el cursor y el teclado.
   $('#editor-scroll').addEventListener('click', (e) => {
-    if (!editor || !editor.isEditable || $('#toolbar').hidden || !needsTrailingParagraph(editor.state.doc)) return;
-    if (e.target.closest?.('td, th, a, button, input, img, #link-previews, .edited, #note-chips, #trash-banner')) return;
-    const last = editor.view.dom.lastElementChild;
-    if (!last || e.clientY <= last.getBoundingClientRect().bottom) return;
-    writeAtEnd(editor);
+    if (!editor || !editor.isEditable || $('#toolbar').hidden) return;
+    if (e.target.closest?.('td, th, a, button, input, img, #link-previews, .edited, #trash-banner')) return;
+    const doc = editor.state.doc;
+    const dom = editor.view.dom;
+    const first = dom.firstElementChild;
+    const last = dom.lastElementChild;
+    if (first && needsLeadingParagraph(doc) && e.clientY < first.getBoundingClientRect().top
+      && e.clientY > $('#note-title').getBoundingClientRect().bottom) { writeAtStart(editor); return; }
+    if (last && needsTrailingParagraph(doc) && e.clientY > last.getBoundingClientRect().bottom) writeAtEnd(editor);
   });
   // pointerdown + preventDefault: el foco queda en el texto y el teclado no se cierra.
   document.querySelectorAll('#toolbar [data-cmd]').forEach((b) => {
@@ -1190,7 +1195,12 @@ function bindEditorUi() {
     markDirty();
   });
   $('#note-title').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); editor?.commands.focus('start'); }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (!editor) return;
+    // Si la nota empieza con una tabla (o imagen), Enter crea un renglón arriba en vez de entrar a la primera celda.
+    if (editor.isEditable && needsLeadingParagraph(editor.state.doc)) writeAtStart(editor);
+    else editor.commands.focus('start');
   });
 
   $('#editor').addEventListener('change', (e) => {

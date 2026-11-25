@@ -694,6 +694,21 @@ const RenglonFinal = Extension.create({
   },
 });
 
+// Al principio no se deja un renglón fijo (separaría el título de la tabla y saldría en la vista previa):
+// se crea al tocar entre el título y la tabla, o con Enter en el título.
+export function needsLeadingParagraph(doc) {
+  const first = doc.firstChild;
+  return !!first && FIN_SIN_TEXTO.has(first.type.name);
+}
+export function writeAtStart(editor) {
+  const st = editor.state;
+  const tr = st.tr;
+  if (needsLeadingParagraph(st.doc)) tr.insert(0, st.schema.nodes.paragraph.create());
+  tr.setSelection(TextSelection.atStart(tr.doc)).scrollIntoView();
+  editor.view.dispatch(tr);
+  editor.view.focus();
+}
+
 // Tocar debajo del final de la nota: si termina en tabla o imagen, agrega el renglón y pone el cursor ahí.
 export function writeAtEnd(editor) {
   const st = editor.state;
