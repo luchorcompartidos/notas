@@ -693,3 +693,21 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
 #menu.cell-menu .menu-item { min-height: 42px; }
 #menu.cell-menu .menu-item svg { width: 18px; height: 18px; vertical-align: -4px; margin-right: 4px; }
 .ProseMirror td, .ProseMirror th { -webkit-touch-callout: none; }
+
+/* ---------- WebView viejas (Android 5/6, Chromium 95–106) ----------
+   Solo se aplica donde no existe color-mix() o :has(); en la web y en los celulares actuales no cambia nada. */
+@supports not (color: color-mix(in srgb, red 50%, blue)) {
+  #view-editor .appbar.scrolled { background: var(--note-bg, var(--surface-container)); }
+  .toolbar { background: var(--note-bg, var(--surface-container)); }
+  .mini-chip { background: rgba(127, 127, 127, .15); }
+  ::selection { background: rgba(103, 80, 164, .3); }
+  .mini-chip.overdue { background: rgba(179, 38, 30, .16); }
+  .link-card { background: var(--surface-container); }
+  .sync-banner { background: rgba(179, 38, 30, .14); }
+  .ProseMirror th { background: rgba(127, 127, 127, .12); }
+  .ProseMirror .selectedCell::after { background: rgba(103, 80, 164, .18); }
+}
+@supports not selector(:has(a)) {
+  body.editor-open .snackbar { bottom: calc(var(--toolbar-h) + 12px + env(safe-area-inset-bottom) + var(--kb)); }
+  .card.with-drag .card-title, .card.with-drag .card-text:first-of-type { padding-right: 28px; }
+}

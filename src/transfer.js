@@ -390,8 +390,13 @@ const textToHtml = (t) => t.replace(/\r\n?/g, '\n').split('\n').map((l) => `<p>$
 const baseName = (f) => f.name.replace(/\.[^.]+$/, '');
 
 async function pdfToHtml(file) {
-  const pdfjs = await import('pdfjs-dist');
-  const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+  // WebView viejas (Android 5/6): pdfjs moderno usa funciones de Chromium 98+; ahí va la compilación "legacy".
+  // En los navegadores actuales se sigue usando la moderna.
+  const modern = typeof Promise.withResolvers === 'function' && typeof structuredClone === 'function'
+    && typeof AbortSignal !== 'undefined' && typeof AbortSignal.any === 'function';
+  const [pdfjs, worker] = modern
+    ? await Promise.all([import('pdfjs-dist'), import('pdfjs-dist/build/pdf.worker.min.mjs?url')])
+    : await Promise.all([import('pdfjs-dist/legacy/build/pdf.mjs'), import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')]);
   pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
   const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
   const paras = [];

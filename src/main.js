@@ -191,6 +191,7 @@ function setView(view) {
   state.view = view;
   ['login', 'list', 'editor'].forEach((v) => $(`#view-${v}`).classList.toggle('active', v === view));
   $('#view-list').classList.toggle('behind', view === 'editor');
+  document.body.classList.toggle('editor-open', view === 'editor'); // respaldo de :has() en WebView viejas
   syncBars();
 }
 
@@ -570,6 +571,7 @@ function cardEl(n) {
   if (manualMode()) {
     const h = document.createElement('button');
     h.className = 'card-drag';
+    el.classList.add('with-drag'); // respaldo de :has() en WebView viejas
     h.setAttribute('aria-label', 'Arrastrar para ordenar');
     h.innerHTML = icon('drag');
     el.appendChild(h);
@@ -1288,11 +1290,21 @@ $('#btn-menu-list').addEventListener('click', (e) => {
   ]);
 });
 
+// Android y WebView (Chromium) del equipo: sirve para saber si una tablet vieja tiene la WebView actualizada.
+function deviceInfo() {
+  const ua = navigator.userAgent;
+  const android = (/Android ([\d.]+)/.exec(ua) || [])[1];
+  const chrome = (/Chrome\/(\d+)/.exec(ua) || [])[1];
+  if (!android) return '';
+  return `Android ${android}${chrome ? ` · ${isNative ? 'WebView' : 'Chrome'} ${chrome}` : ''}`;
+}
+
 function showVersion() {
   const r = state.release;
   openSheet(`
     <h2 class="sheet-title">${BRAND} <small class="ver">v${esc(APP_VERSION)}</small></h2>
     <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · tablas dentro de las notas</p>
+    ${deviceInfo() ? `<p class="sheet-text">Equipo: ${esc(deviceInfo())}</p>` : ''}
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);

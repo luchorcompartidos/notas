@@ -125,15 +125,20 @@ export async function syncNative(reminders, describe) {
   } catch (e) { console.warn('Recordatorios: no se pudieron programar', e); }
 }
 
+// Android 5: el plugin usa con allowWhileIdle una función que recién existe en Android 6 y la app se cierra.
+// Ahí se programa sin ella (suena igual; con la pantalla apagada puede demorarse hasta que el equipo despierte).
+const ANDROID_VER = Number((/Android (\d+)/.exec(navigator.userAgent) || [])[1] || 0);
+const IDLE_OK = !ANDROID_VER || ANDROID_VER >= 6;
+
 // Los que se repiten quedan programados en Android aunque no se abra la app ("on" = día/hora fijos).
 function scheduleFor(r, when, now) {
-  if (!r.repeat || (r.snoozedUntil && r.snoozedUntil > now)) return { at: new Date(when), allowWhileIdle: true };
+  if (!r.repeat || (r.snoozedUntil && r.snoozedUntil > now)) return { at: new Date(when), allowWhileIdle: IDLE_OK };
   const d = new Date(r.at);
   const on = { hour: d.getHours(), minute: d.getMinutes() };
   if (r.repeat === 'week') on.weekday = d.getDay() + 1; // 1 = domingo
   if (r.repeat === 'month') on.day = d.getDate();
   if (r.repeat === 'year') { on.month = d.getMonth() + 1; on.day = d.getDate(); }
-  return { on, allowWhileIdle: true };
+  return { on, allowWhileIdle: IDLE_OK };
 }
 
 /* ---------- Web ---------- */
@@ -179,7 +184,7 @@ export async function notifyNow(title, body, extra = {}) {
       if (p.display !== 'granted') return;
       await LocalNotifications.schedule({ notifications: [{
         id: Math.floor(Math.random() * 1000000000) + 1000000000, title, body, largeBody: body,
-        schedule: { at: new Date(Date.now() + 500), allowWhileIdle: true }, smallIcon: 'ic_stat_notas', iconColor: '#6750A4', extra,
+        schedule: { at: new Date(Date.now() + 500), allowWhileIdle: IDLE_OK }, smallIcon: 'ic_stat_notas', iconColor: '#6750A4', extra,
       }] });
     } catch { /* nada */ }
     return;
