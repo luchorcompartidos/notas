@@ -31,6 +31,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | — | v0.2.2 | **Dispositivos viejos (Parte 2)**: el APK se instala desde **Android 5.0** (antes, desde Android 6); sigue siendo un solo APK para todos. La Release trae la tabla «¿Qué archivo bajar?» y la nota sobre la WebView |
 | — | v0.2.3 | **Tablas**: siempre queda un renglón vacío debajo de una tabla (o imagen) que está al final de la nota, tocar debajo de la tabla abre el teclado en un renglón nuevo, y «Escribir arriba/debajo de la tabla» en el menú de la celda (mantener apretada) |
 | — | v0.2.4 | **Tablas**: si la nota empieza con una tabla (o imagen), tocar entre el título y la tabla, o Enter en el título, crea un renglón arriba con el teclado abierto |
+| — | v0.2.5 | **Atrapador de cierres**: si la app se cierra por un error, en vez de «Se ha detenido la aplicación» muestra el error con «Copiar» y «Enviar…» (para diagnosticar la tablet con Android 5.0) |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
 
