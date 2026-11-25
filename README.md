@@ -30,6 +30,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | — | v0.2.1 | **Dispositivos viejos (Parte 1)**: la app anda con las WebView de Android 5/6 actualizadas (Chromium 94 o más): colores de respaldo donde falta `color-mix`, snackbar y tarjetas sin `:has`, importar PDF con la versión «legacy» de pdfjs, recordatorios sin cierre en Android 5, aviso en español si la WebView es demasiado vieja (con enlace a Play Store) y Android/WebView del equipo en «Versión» |
 | — | v0.2.2 | **Dispositivos viejos (Parte 2)**: el APK se instala desde **Android 5.0** (antes, desde Android 6); sigue siendo un solo APK para todos. La Release trae la tabla «¿Qué archivo bajar?» y la nota sobre la WebView |
 | — | v0.2.3 | **Tablas**: siempre queda un renglón vacío debajo de una tabla (o imagen) que está al final de la nota, tocar debajo de la tabla abre el teclado en un renglón nuevo, y «Escribir arriba/debajo de la tabla» en el menú de la celda (mantener apretada) |
+| — | v0.2.4 | **Tablas**: si la nota empieza con una tabla (o imagen), tocar entre el título y la tabla, o Enter en el título, crea un renglón arriba con el teclado abierto |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
 
