@@ -135,6 +135,12 @@ jobs:
           sed -i 's/^ext {/ext {\n    rgcfaIncludeGoogle = true/' android/variables.gradle
           grep -q "rgcfaIncludeGoogle" android/variables.gradle || echo "::error::No se pudo activar Google en variables.gradle"
           grep -q "com.google.gms:google-services" android/build.gradle || echo "::warning::android/build.gradle no tiene el plugin google-services"
+      - name: Mínimo Android 5.0 (API 21) para tablets viejas
+        run: |
+          # Un solo APK para todos: Capacitor 7 y sus plugins toman el mínimo de variables.gradle (por defecto 23 = Android 6)
+          sed -i -E 's/minSdkVersion = [0-9]+/minSdkVersion = 21/' android/variables.gradle
+          grep -q "minSdkVersion = 21" android/variables.gradle || { echo "::error::No se pudo bajar minSdkVersion a 21"; exit 1; }
+          grep -n "SdkVersion\|Version =" android/variables.gradle
       - name: Firma fija del APK
         run: |
           if [ -z "$KEYSTORE_B64" ]; then
@@ -196,10 +202,30 @@ jobs:
           cp "$APK" "out/notas-v${VERSION}.apk"
           # Verificar la huella de la firma (debe coincidir con la SHA-1 cargada en Firebase)
           "$ANDROID_HOME"/build-tools/$(ls "$ANDROID_HOME"/build-tools | sort -V | tail -1)/apksigner verify --print-certs "out/notas-v${VERSION}.apk" | grep -i "SHA-1" || true
+      - name: Verificar mínimo de Android en el APK
+        run: |
+          AAPT="$ANDROID_HOME"/build-tools/$(ls "$ANDROID_HOME"/build-tools | sort -V | tail -1)/aapt
+          "$AAPT" dump badging "out/notas-v${VERSION}.apk" | grep -E "sdkVersion|native-code" || true
+          "$AAPT" dump badging "out/notas-v${VERSION}.apk" | grep -q "sdkVersion:'21'" || { echo "::error::El APK no quedó con mínimo Android 5.0 (API 21)"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: notas-v${{ env.VERSION }}
           path: out/*.apk
+      - name: Notas de la versión
+        if: needs.version.outputs.release == 'true'
+        run: |
+          cat > "$RUNNER_TEMP/notas-release.md" <<EOF
+          ## ¿Qué archivo bajar?
+          | Archivo | Arquitectura | Para |
+          |---|---|---|
+          | \`notas-v${VERSION}.apk\` | universal (armeabi-v7a, arm64-v8a, x86, x86_64) | Todos: celulares y tablets con **Android 5.0 o más** |
+
+          Es un solo APK para todos los equipos (no tiene partes nativas por arquitectura).
+
+          **Tablets con Android 5 o 6:** antes de abrir ANote..., actualizá **"Android System WebView"** desde Play Store (hace falta la versión 94 o más). Si la WebView es vieja, la app muestra un aviso con un botón a Play Store. En "Versión" (menú lateral) se ve la versión de Android y de la WebView del equipo.
+
+          EOF
+          echo "NOTAS_RELEASE_BODY=$RUNNER_TEMP/notas-release.md" >> "$GITHUB_ENV"
       - name: Crear Release
         if: needs.version.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
@@ -207,5 +233,6 @@ jobs:
           tag_name: v${{ env.VERSION }}
           name: v${{ env.VERSION }}
           target_commitish: ${{ github.sha }}
+          body_path: ${{ env.NOTAS_RELEASE_BODY }}
           generate_release_notes: true
           files: out/*.apk
