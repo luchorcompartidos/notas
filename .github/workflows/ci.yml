@@ -140,6 +140,10 @@ jobs:
           # Un solo APK para todos: Capacitor 7 y sus plugins toman el mínimo de variables.gradle (por defecto 23 = Android 6)
           sed -i -E 's/minSdkVersion = [0-9]+/minSdkVersion = 21/' android/variables.gradle
           grep -q "minSdkVersion = 21" android/variables.gradle || { echo "::error::No se pudo bajar minSdkVersion a 21"; exit 1; }
+          # firebase-auth 23.x pide Android 6 (API 23); la 22.3.1 es la última de la serie 22 (pide API 19).
+          # Con skipNativeAuth el inicio de sesión lo hace el SDK web: la parte nativa solo trae la credencial de Google.
+          sed -i 's/^ext {/ext {\n    firebaseAuthVersion = "22.3.1"/' android/variables.gradle
+          grep -q 'firebaseAuthVersion = "22.3.1"' android/variables.gradle || { echo "::error::No se pudo fijar firebaseAuthVersion"; exit 1; }
           grep -n "SdkVersion\|Version =" android/variables.gradle
       - name: Firma fija del APK
         run: |
