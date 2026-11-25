@@ -144,6 +144,12 @@ jobs:
           # Con skipNativeAuth el inicio de sesión lo hace el SDK web: la parte nativa solo trae la credencial de Google.
           sed -i 's/^ext {/ext {\n    firebaseAuthVersion = "22.3.1"/' android/variables.gradle
           grep -q 'firebaseAuthVersion = "22.3.1"' android/variables.gradle || { echo "::error::No se pudo fijar firebaseAuthVersion"; exit 1; }
+          # Cordova (puente de Capacitor; ANote no usa plugins de Cordova) declara API 22: se acepta igual con overrideLibrary
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          grep -q 'xmlns:tools' "$MANIFEST" || sed -i 's#<manifest xmlns:android="http://schemas.android.com/apk/res/android"#<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools"#' "$MANIFEST"
+          sed -i '0,/<application/s#<application#<uses-sdk tools:overrideLibrary="org.apache.cordova" />\n    <application#' "$MANIFEST"
+          grep -q 'overrideLibrary="org.apache.cordova"' "$MANIFEST" && grep -q 'xmlns:tools' "$MANIFEST" || { echo "::error::No se pudo agregar overrideLibrary"; exit 1; }
+          head -5 "$MANIFEST"
           grep -n "SdkVersion\|Version =" android/variables.gradle
       - name: Firma fija del APK
         run: |
@@ -195,6 +201,13 @@ jobs:
           else
             ./gradlew assembleDebug --no-daemon --stacktrace
           fi
+      - name: Bibliotecas que piden más que Android 5.0 (solo si falló)
+        if: failure()
+        run: |
+          find ~/.gradle/caches -name "*.aar" | while read -r f; do
+            m=$(unzip -p "$f" AndroidManifest.xml 2>/dev/null | grep -o 'minSdkVersion="[0-9]*"' | grep -o '[0-9]\+')
+            [ -n "$m" ] && [ "$m" -gt 21 ] && echo "::warning::minSdk $m: $(basename "$f")"
+          done | sort -u
       - name: Renombrar APK
         run: |
           mkdir -p out
