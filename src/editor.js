@@ -347,8 +347,17 @@ export function runTableCommand(editor, cmd, { focus = true } = {}) {
     case 'textAfter':
     case 'textBefore': {
       const at = cmd === 'textAfter' ? ctx.tablePos + ctx.table.nodeSize : ctx.tablePos;
-      const tr = st.tr.insert(at, st.schema.nodes.paragraph.create());
-      tr.setSelection(TextSelection.create(tr.doc, at + 1)).scrollIntoView();
+      // Si al lado ya hay un renglón vacío (por ejemplo, el que queda siempre al final), se usa ese.
+      const $at = st.doc.resolve(at);
+      const near = cmd === 'textAfter' ? $at.nodeAfter : $at.nodeBefore;
+      const tr = st.tr;
+      if (near && near.type.name === 'paragraph' && near.content.size === 0) {
+        tr.setSelection(TextSelection.create(tr.doc, cmd === 'textAfter' ? at + 1 : at - 1));
+      } else {
+        tr.insert(at, st.schema.nodes.paragraph.create());
+        tr.setSelection(TextSelection.create(tr.doc, at + 1));
+      }
+      tr.scrollIntoView();
       editor.view.dispatch(tr);
       if (focus) editor.view.focus();
       return true;
@@ -662,6 +671,39 @@ export function contentExtensions({ resolveImage, reminderIds } = {}) {
   ];
 }
 
+// Renglón final: si la nota termina en una tabla o una imagen, siempre queda un renglón vacío debajo
+// para seguir escribiendo (en el celular no hay otra forma de poner el cursor después de la tabla).
+const FIN_SIN_TEXTO = new Set(['table', 'image']);
+export function needsTrailingParagraph(doc) {
+  const last = doc.lastChild;
+  return !!last && FIN_SIN_TEXTO.has(last.type.name);
+}
+const RenglonFinal = Extension.create({
+  name: 'renglonFinal',
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      key: new PluginKey('renglonFinal'),
+      appendTransaction: (trs, _old, state) => {
+        if (!trs.some((t) => t.docChanged)) return null;
+        // Solo ante cambios hechos en este dispositivo: si lo agregaran todos a la vez, al fusionarse quedarían varios renglones.
+        if (trs.some((t) => t.getMeta(ySyncPluginKey)?.isChangeOrigin)) return null;
+        if (!needsTrailingParagraph(state.doc)) return null;
+        return state.tr.insert(state.doc.content.size, state.schema.nodes.paragraph.create());
+      },
+    })];
+  },
+});
+
+// Tocar debajo del final de la nota: si termina en tabla o imagen, agrega el renglón y pone el cursor ahí.
+export function writeAtEnd(editor) {
+  const st = editor.state;
+  const tr = st.tr;
+  if (needsTrailingParagraph(st.doc)) tr.insert(st.doc.content.size, st.schema.nodes.paragraph.create());
+  tr.setSelection(TextSelection.atEnd(tr.doc)).scrollIntoView();
+  editor.view.dispatch(tr);
+  editor.view.focus();
+}
+
 // El contenido vive en el documento Yjs de la nota (fusión de cambios entre dispositivos).
 export function createEditor(element, { ydoc, onUpdate, onState, onCreate, reminderIds, resolveImage }) {
   return new Editor({
@@ -670,6 +712,7 @@ export function createEditor(element, { ydoc, onUpdate, onState, onCreate, remin
       ...contentExtensions({ resolveImage, reminderIds }),
       Placeholder.configure({ placeholder: 'Escribí tu nota…' }),
       PegarTablaTSV,
+      RenglonFinal,
       Collaboration.configure({ document: ydoc, field: 'default' }),
     ],
     editorProps: {

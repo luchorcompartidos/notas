@@ -7,6 +7,7 @@ import {
   tableContext, setCellsAttrs, insertTable, runTableCommand, ALIGN_H, ALIGN_V,
   tableSizes, setColumnWidth, setColumnsMode, setRowHeight, setRowsMode,
   copyTablePart, insertCopied, duplicateTablePart, getTableClip, CELL_BG, sortTable, placeCursorAt,
+  needsTrailingParagraph, writeAtEnd,
 } from './editor.js';
 import * as Y from 'yjs';
 import { generateHTML, generateJSON } from '@tiptap/core';
@@ -1078,6 +1079,9 @@ function openCellMenu(x, y) {
   const clip = getTableClip();
   const run = (fn) => () => { if (editor && tableContext(editor.state)) fn(); };
   const items = [
+    { label: '↑ Escribir arriba de la tabla', onClick: run(() => runTableCommand(editor, 'textBefore')) },
+    { label: '↓ Escribir debajo de la tabla', onClick: run(() => runTableCommand(editor, 'textAfter')) },
+    { divider: true },
     { label: `${icon('palette')} Color de fondo…`, onClick: run(() => openTableSheet({ scrollTo: 'cells' })) },
     { divider: true },
     { label: `Copiar fila ${ctx.row}`, onClick: run(() => { const c = copyTablePart(editor, 'row'); if (c) snackbar(`Fila ${c.index} copiada`); }) },
@@ -1147,6 +1151,14 @@ function bindCellPress() {
 function bindEditorUi() {
   bindTableBar();
   bindCellPress();
+  // Tocar debajo de una tabla (o imagen) que está al final de la nota: renglón nuevo con el cursor y el teclado.
+  $('#editor-scroll').addEventListener('click', (e) => {
+    if (!editor || !editor.isEditable || $('#toolbar').hidden || !needsTrailingParagraph(editor.state.doc)) return;
+    if (e.target.closest?.('td, th, a, button, input, img, #link-previews, .edited, #note-chips, #trash-banner')) return;
+    const last = editor.view.dom.lastElementChild;
+    if (!last || e.clientY <= last.getBoundingClientRect().bottom) return;
+    writeAtEnd(editor);
+  });
   // pointerdown + preventDefault: el foco queda en el texto y el teclado no se cierra.
   document.querySelectorAll('#toolbar [data-cmd]').forEach((b) => {
     b.addEventListener('pointerdown', (e) => e.preventDefault());
