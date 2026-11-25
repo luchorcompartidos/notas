@@ -8,6 +8,12 @@ import { isNative } from './native.js';
 /* ---------- Contenido de la nota como JSON de ProseMirror ---------- */
 const inline = (n) => (n.type === 'text' ? n.text || '' : n.type === 'hardBreak' ? '\n' : (n.content || []).map(inline).join(''));
 
+// Tablas: filas → celdas (cada celda con sus bloques), con la alineación y si es encabezado.
+const tableRows = (n) => (n.content || []).map((row) => (row.content || []).map((cell) => ({
+  blocks: cell.content || [], header: cell.type === 'tableHeader', align: cell.attrs?.align || 'left', valign: cell.attrs?.valign || 'top',
+})));
+const cellPlain = (cell) => blocksToText(cell.blocks).map((l) => l.trim()).filter(Boolean).join(' / ');
+
 export async function resolveImages(json, getImage) {
   const walk = async (n) => {
     if (n.type === 'image' && n.attrs?.src?.startsWith('img:')) n.attrs.src = (await getImage(n.attrs.src)) || '';
@@ -27,6 +33,7 @@ function blocksToText(nodes, depth = 0) {
     else if (n.type === 'blockquote') out.push(...blocksToText(n.content, depth).map((l) => `> ${l}`));
     else if (n.type === 'horizontalRule') out.push('—————');
     else if (n.type === 'image') out.push(`${pad}[imagen]`);
+    else if (n.type === 'table') { out.push(...tableRows(n).map((r) => pad + r.map(cellPlain).join(' | ')), ''); }
     else if (['bulletList', 'orderedList', 'taskList'].includes(n.type)) {
       num = 0;
       for (const item of n.content || []) {
@@ -70,6 +77,16 @@ function blocksToMd(nodes, depth = 0) {
     else if (n.type === 'blockquote') out.push(...blocksToMd(n.content, depth).map((l) => (l ? `> ${l}` : '>')));
     else if (n.type === 'horizontalRule') out.push('---', '');
     else if (n.type === 'image') out.push(`${pad}![imagen](${n.attrs?.src || ''})`, '');
+    else if (n.type === 'table') {
+      const rows = tableRows(n);
+      if (rows.length) {
+        const cols = Math.max(...rows.map((r) => r.length));
+        const md = (c) => (c ? blocksToMd(c.blocks).filter((l) => l !== '').map((l) => l.trim()).join('<br>').replace(/\|/g, '\\|') : '');
+        const line = (r) => `| ${Array.from({ length: cols }, (_, j) => md(r[j])).join(' | ')} |`;
+        const sep = Array.from({ length: cols }, (_, j) => ({ center: ':---:', right: '---:' }[rows[0][j]?.align] || '---'));
+        out.push(line(rows[0]), `| ${sep.join(' | ')} |`, ...rows.slice(1).map(line), '');
+      }
+    }
     else if (['bulletList', 'orderedList', 'taskList'].includes(n.type)) {
       let num = 0;
       for (const item of n.content || []) {
@@ -109,7 +126,9 @@ const b64ToBytes = (url) => Uint8Array.from(atob(url.split(',')[1]), (ch) => ch.
 /* ---------- Word (.docx) ---------- */
 export async function toDocx(notes) {
   const d = await import('docx');
-  const { Document, Packer, Paragraph, TextRun, HeadingLevel, ImageRun, ExternalHyperlink, LevelFormat, AlignmentType } = d;
+  const { Document, Packer, Paragraph, TextRun, HeadingLevel, ImageRun, ExternalHyperlink, LevelFormat, AlignmentType, Table, TableRow, TableCell, WidthType, VerticalAlign } = d;
+  const H_DOCX = { left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT, justify: AlignmentType.JUSTIFIED };
+  const V_DOCX = { top: VerticalAlign.TOP, middle: VerticalAlign.CENTER, bottom: VerticalAlign.BOTTOM };
   let listInstance = 0;
   const runs = (nodes) => (nodes || []).flatMap((n) => {
     if (n.type === 'hardBreak') return [new TextRun({ text: '', break: 1 })];
@@ -119,13 +138,29 @@ export async function toDocx(notes) {
     const link = (n.marks || []).find((m) => m.type === 'link');
     return link ? [new ExternalHyperlink({ link: link.attrs.href, children: [new TextRun({ ...opts, style: 'Hyperlink' })] })] : [new TextRun(opts)];
   });
-  const blocks = async (nodes, depth = 0) => {
+  const blocks = async (nodes, depth = 0, alignment) => {
     const out = [];
     for (const n of nodes || []) {
-      if (n.type === 'paragraph') out.push(new Paragraph({ children: runs(n.content), indent: depth ? { left: depth * 360 } : undefined }));
-      else if (n.type === 'heading') out.push(new Paragraph({ heading: n.attrs?.level === 1 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2, children: runs(n.content) }));
+      if (n.type === 'paragraph') out.push(new Paragraph({ children: runs(n.content), alignment, indent: depth ? { left: depth * 360 } : undefined }));
+      else if (n.type === 'heading') out.push(new Paragraph({ heading: n.attrs?.level === 1 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2, alignment, children: runs(n.content) }));
       else if (n.type === 'blockquote') out.push(...(await blocks(n.content, depth + 1)));
       else if (n.type === 'horizontalRule') out.push(new Paragraph({ border: { bottom: { style: 'single', size: 6, color: 'BBBBBB', space: 4 } }, children: [] }));
+      else if (n.type === 'table') {
+        const rows = tableRows(n);
+        const cols = Math.max(1, ...rows.map((r) => r.length));
+        const trs = [];
+        for (const r of rows) {
+          const cells = [];
+          for (let j = 0; j < cols; j++) {
+            const c = r[j];
+            let kids = c ? await blocks(c.blocks, 0, H_DOCX[c.align]) : [];
+            if (!kids.length) kids = [new Paragraph({ children: [] })];
+            cells.push(new TableCell({ children: kids, verticalAlign: V_DOCX[c?.valign || 'top'], shading: c?.header ? { fill: 'EEEEEE' } : undefined }));
+          }
+          trs.push(new TableRow({ children: cells, tableHeader: r.every((c) => c.header) }));
+        }
+        if (trs.length) out.push(new Table({ rows: trs, width: { size: 100, type: WidthType.PERCENTAGE } }), new Paragraph({ children: [] }));
+      }
       else if (n.type === 'image' && n.attrs?.src) {
         try {
           const r = await rasterize(n.attrs.src, 'image/png', 1200);
@@ -191,6 +226,38 @@ export async function toPdf(notes) {
       else if (n.type === 'heading') { y += 2; write(inline(n), { size: n.attrs?.level === 1 ? 16 : 13.5, style: 'bold', after: 2.5 }); }
       else if (n.type === 'blockquote') await blocks(n.content, depth + 1);
       else if (n.type === 'horizontalRule') { ensure(4); pdf.setDrawColor(180); pdf.line(M, y, M + W, y); y += 4; }
+      else if (n.type === 'table') {
+        // Grilla simple: columnas del mismo ancho, alto de cada fila según su celda más larga.
+        const rows = tableRows(n);
+        const cols = Math.max(1, ...rows.map((r) => r.length));
+        const cw = (W - ind) / cols; const pad = 1.6; const size = cols > 6 ? 8.5 : 10; const lh = size * 0.42;
+        pdf.setFontSize(size); pdf.setDrawColor(150); pdf.setLineWidth(0.25);
+        y += 1;
+        for (const r of rows) {
+          const cells = Array.from({ length: cols }, (_, j) => {
+            const c = r[j];
+            pdf.setFont('helvetica', c?.header ? 'bold' : 'normal');
+            const text = c ? blocksToText(c.blocks).map((l) => l.trim()).filter(Boolean).join('\n') : '';
+            return { c, lines: pdf.splitTextToSize(pdfSafe(text), cw - pad * 2) };
+          });
+          const rh = Math.max(...cells.map((x) => x.lines.length || 1)) * lh + pad * 2;
+          ensure(rh);
+          const top = y;
+          cells.forEach(({ c, lines }, j) => {
+            const x = M + ind + j * cw;
+            if (c?.header) { pdf.setFillColor(238); pdf.rect(x, top, cw, rh, 'F'); }
+            pdf.rect(x, top, cw, rh);
+            pdf.setFont('helvetica', c?.header ? 'bold' : 'normal'); pdf.setTextColor(20);
+            const h = lines.length * lh;
+            const y0 = c?.valign === 'bottom' ? top + rh - pad - h : c?.valign === 'middle' ? top + (rh - h) / 2 : top + pad;
+            const al = c?.align === 'center' ? 'center' : c?.align === 'right' ? 'right' : 'left';
+            const tx = al === 'center' ? x + cw / 2 : al === 'right' ? x + cw - pad : x + pad;
+            lines.forEach((ln, k) => pdf.text(ln, tx, y0 + lh * (k + 0.8), { align: al }));
+          });
+          y = top + rh;
+        }
+        y += 3;
+      }
       else if (n.type === 'image' && n.attrs?.src) {
         try {
           const r = await rasterize(n.attrs.src, 'image/jpeg', 1400);
@@ -275,10 +342,30 @@ export function markdownToHtml(md) {
     list = { kind, tag: kind === 'ol' ? 'ol' : 'ul' };
     out.push(kind === 'task' ? '<ul data-type="taskList">' : `<${list.tag}>`);
   };
-  for (const raw of lines) {
+  const cellsOf = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
+  const isSep = (l) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(l);
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
     const line = raw.replace(/\s+$/, '');
     let m;
     if (!line.trim()) { close(); continue; }
+    // Tabla de Markdown: | a | b | seguida de | --- | --- |
+    if (line.includes('|') && i + 1 < lines.length && isSep(lines[i + 1])) {
+      close();
+      const aligns = cellsOf(lines[i + 1]).map((c) => (/^:-+:$/.test(c) ? 'center' : /-+:$/.test(c) ? 'right' : ''));
+      const cell = (tag, t, j) => `<${tag}${aligns[j] ? ` style="text-align:${aligns[j]}"` : ''}><p>${t.split(/<br\s*\/?>/i).map(mdInlineToHtml).join('</p><p>')}</p></${tag}>`;
+      const head = cellsOf(line);
+      let html = `<table><tr>${head.map((t, j) => cell('th', t, j)).join('')}</tr>`;
+      i += 2;
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
+        const r = cellsOf(lines[i]);
+        html += `<tr>${head.map((_, j) => cell('td', r[j] || '', j)).join('')}</tr>`;
+        i++;
+      }
+      i--;
+      out.push(`${html}</table>`);
+      continue;
+    }
     if ((m = /^\s*[-*+]\s+\[( |x|X)\]\s+(.*)$/.exec(line))) { open('task'); out.push(`<li data-type="taskItem" data-checked="${m[1] !== ' '}"><p>${mdInlineToHtml(m[2])}</p></li>`); continue; }
     if ((m = /^\s*[-*+]\s+(.*)$/.exec(line))) { open('ul'); out.push(`<li><p>${mdInlineToHtml(m[1])}</p></li>`); continue; }
     if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(line))) { open('ol'); out.push(`<li><p>${mdInlineToHtml(m[1])}</p></li>`); continue; }
@@ -369,6 +456,7 @@ function blocksToWa(nodes, depth = 0) {
     else if (n.type === 'heading') out.push('', `*${inline(n).trim()}*`);
     else if (n.type === 'blockquote') out.push(...blocksToWa(n.content, depth).map((l) => `> ${l}`));
     else if (n.type === 'horizontalRule') out.push('———');
+    else if (n.type === 'table') out.push(...tableRows(n).map((r) => pad + r.map((c) => (c.header ? `*${cellPlain(c)}*` : cellPlain(c))).join(' | ')), '');
     else if (['bulletList', 'orderedList', 'taskList'].includes(n.type)) {
       let num = 0;
       for (const item of n.content || []) {

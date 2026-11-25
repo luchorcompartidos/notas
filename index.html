@@ -115,6 +115,20 @@
           <p class="edited"><button class="sync-state" id="sync-state" type="button"></button><span id="edited"></span></p>
         </div>
       </main>
+      <nav class="toolbar table-bar" id="table-bar" aria-label="Tabla" hidden>
+        <button class="tbl-chip ripple" data-tbl="menu" aria-label="Opciones de la tabla" data-icon="table"><span id="tbl-pos">Tabla</span></button>
+        <span class="tool-sep"></span>
+        <button class="tbl-btn ripple" data-tbl="rowBefore" title="Insertar fila arriba">+ Fila ↑</button>
+        <button class="tbl-btn ripple" data-tbl="rowAfter" title="Insertar fila abajo">+ Fila ↓</button>
+        <button class="tbl-btn ripple" data-tbl="colBefore" title="Insertar columna a la izquierda">+ Col ←</button>
+        <button class="tbl-btn ripple" data-tbl="colAfter" title="Insertar columna a la derecha">+ Col →</button>
+        <span class="tool-sep"></span>
+        <button class="tool ripple" data-tbl="alignH" aria-label="Alineación horizontal"></button>
+        <button class="tool ripple" data-tbl="alignV" aria-label="Alineación vertical"></button>
+        <span class="tool-sep"></span>
+        <button class="tbl-btn danger ripple" data-tbl="deleteRow" title="Eliminar fila">− Fila</button>
+        <button class="tbl-btn danger ripple" data-tbl="deleteCol" title="Eliminar columna">− Col</button>
+      </nav>
       <nav class="toolbar" id="toolbar" aria-label="Formato">
         <button class="tool ripple" data-cmd="undo" aria-label="Deshacer" data-icon="undo"></button>
         <button class="tool ripple" data-cmd="redo" aria-label="Rehacer" data-icon="redo"></button>
@@ -126,6 +140,7 @@
         <button class="tool ripple" data-cmd="underline" aria-label="Subrayado" data-icon="underline"></button>
         <button class="tool ripple" data-cmd="bulletList" aria-label="Lista con viñetas" data-icon="bullets"></button>
         <button class="tool ripple" data-cmd="orderedList" aria-label="Lista numerada" data-icon="numbers"></button>
+        <button class="tool ripple" data-cmd="table" aria-label="Tabla" data-icon="table"></button>
         <button class="tool ripple" data-cmd="image" aria-label="Agregar imagen" data-icon="image"></button>
       </nav>
     </section>

@@ -4,6 +4,7 @@ import { requestPersistence } from './store.js';
 import {
   createEditor, runCommand, isActive, summarize, compressImage, makeThumb,
   refreshReminderMarks, currentTaskItem, taskItems, checkTaskItem, compressDataUrl, noteLinks, contentExtensions,
+  tableContext, setCellsAttrs, insertTable, runTableCommand, ALIGN_H, ALIGN_V,
 } from './editor.js';
 import * as Y from 'yjs';
 import { generateHTML, generateJSON } from '@tiptap/core';
@@ -612,6 +613,7 @@ function paintEditorChrome() {
   $('#banner-text').textContent = trashed ? 'Esta nota está en la papelera.' : 'Solo lectura: te compartieron esta nota para ver.';
   $('#btn-restore').hidden = !trashed;
   $('#toolbar').hidden = readOnly;
+  if (readOnly) { $('#table-bar').hidden = true; $('#view-editor').classList.remove('in-table'); }
   $('#btn-share').hidden = trashed;
   $('#btn-share').classList.toggle('active', isShared(noteById(c.id)));
   $('#btn-pin').hidden = trashed;
@@ -653,6 +655,8 @@ async function openNote(id, { push = true, isNew = false, meta = {} } = {}) {
     ...meta,
   };
   state.current = c;
+  $('#table-bar').hidden = true;
+  $('#view-editor').classList.remove('in-table');
   $('#note-title').value = n?.title || '';
   $('#editor-scroll').scrollTop = 0;
   paintEditorChrome();
@@ -713,7 +717,7 @@ async function closeSession() {
   if (editor) {
     const title = $('#note-title').value;
     const s = summarize(editor.getJSON(), editor.getText({ blockSeparator: '\n' }));
-    empty = !title.trim() && !s.preview && !s.thumb && !s.checks.total;
+    empty = !title.trim() && !s.preview && !s.thumb && !s.checks.total && !s.tables;
     // Título automático: nota nueva que se cierra sin título (si la opción está activada)
     if (c.isNew && !empty && !title.trim() && c.session && myRole(noteById(c.id)) !== 'view') {
       const auto = autoTitleFor(s.text);
@@ -801,16 +805,178 @@ function updateToolbar(ed) {
     if (cmd === 'undo') b.disabled = !ed.can().undo();
     if (cmd === 'redo') b.disabled = !ed.can().redo();
   });
+  updateTableBar(ed);
+}
+
+/* ---------- Tablas ---------- */
+const H_LABEL = { left: 'Izquierda', center: 'Centro', right: 'Derecha', justify: 'Justificado' };
+const V_LABEL = { top: 'Arriba', middle: 'Medio', bottom: 'Abajo' };
+const SCOPE_LABEL = { cell: 'Celda', row: 'Fila', col: 'Columna', table: 'Tabla' };
+const tableUi = { cols: 3, rows: 3, header: true, scope: 'cell' };
+
+// Barra de tabla (arriba de la barra de formato): se ve solo con el cursor dentro de una tabla.
+function updateTableBar(ed) {
+  const bar = $('#table-bar');
+  const ctx = ed.isEditable && !$('#toolbar').hidden ? tableContext(ed.state) : null;
+  bar.hidden = !ctx;
+  $('#view-editor').classList.toggle('in-table', !!ctx);
+  if (!ctx) return;
+  $('#tbl-pos').textContent = `F${ctx.row} · C${ctx.col}`;
+  const setIcon = (sel, name, label) => {
+    const b = bar.querySelector(sel);
+    if (b.dataset.cur === name) return;
+    b.dataset.cur = name;
+    b.innerHTML = icon(name);
+    b.setAttribute('aria-label', label);
+    b.title = label;
+  };
+  setIcon('[data-tbl="alignH"]', `align${ctx.align}`, `Alineación horizontal: ${H_LABEL[ctx.align]} (tocá para cambiar)`);
+  setIcon('[data-tbl="alignV"]', `valign${ctx.valign}`, `Alineación vertical: ${V_LABEL[ctx.valign]} (tocá para cambiar)`);
+}
+
+function bindTableBar() {
+  document.querySelectorAll('#table-bar [data-tbl]').forEach((b) => {
+    b.addEventListener('pointerdown', (e) => e.preventDefault());
+    b.addEventListener('click', () => {
+      if (!editor) return;
+      const cmd = b.dataset.tbl;
+      const ctx = tableContext(editor.state);
+      if (!ctx) return;
+      if (cmd === 'menu') { openTableSheet(); return; }
+      if (cmd === 'alignH') {
+        const next = ALIGN_H[(ALIGN_H.indexOf(ctx.align) + 1) % ALIGN_H.length];
+        setCellsAttrs(editor, 'cell', { align: next });
+        snackbar(`Alineación horizontal: ${H_LABEL[next]}`);
+        return;
+      }
+      if (cmd === 'alignV') {
+        const next = ALIGN_V[(ALIGN_V.indexOf(ctx.valign) + 1) % ALIGN_V.length];
+        setCellsAttrs(editor, 'cell', { valign: next });
+        snackbar(`Alineación vertical: ${V_LABEL[next]}`);
+        return;
+      }
+      runTableCommand(editor, cmd);
+    });
+  });
+}
+
+// Botón "Tabla" de la barra de formato: inserta una tabla o, si el cursor ya está en una, abre sus opciones.
+function openTableUi() {
+  if (!editor) return;
+  if (tableContext(editor.state)) openTableSheet(); else openInsertTableSheet();
+}
+
+function openInsertTableSheet() {
+  const MAXC = 20; const MAXR = 200; const G = 8;
+  const cells = [];
+  for (let r = 1; r <= G; r++) for (let c = 1; c <= G; c++) cells.push(`<button class="tbl-pick-cell" data-c="${c}" data-r="${r}" aria-label="${c} columnas × ${r} filas"></button>`);
+  openSheet(`
+    <h2 class="sheet-title">Insertar tabla</h2>
+    <p class="sheet-text">Tocá el tamaño en la grilla o escribí la cantidad (podés subirla o bajarla con − y +).</p>
+    <div class="tbl-picker" id="tbl-picker" style="--g:${G}">${cells.join('')}</div>
+    <p class="tbl-size" id="tbl-size"></p>
+    <div class="tbl-steppers">
+      <div class="tbl-stepper"><span>Columnas</span><button class="step-btn ripple" data-step="cols" data-d="-1" aria-label="Menos columnas">−</button><input id="tbl-cols" type="number" min="1" max="${MAXC}" inputmode="numeric"><button class="step-btn ripple" data-step="cols" data-d="1" aria-label="Más columnas">+</button></div>
+      <div class="tbl-stepper"><span>Filas</span><button class="step-btn ripple" data-step="rows" data-d="-1" aria-label="Menos filas">−</button><input id="tbl-rows" type="number" min="1" max="${MAXR}" inputmode="numeric"><button class="step-btn ripple" data-step="rows" data-d="1" aria-label="Más filas">+</button></div>
+    </div>
+    <label class="tbl-check"><input type="checkbox" id="tbl-header"> Primera fila como encabezado</label>
+    <div class="sheet-actions"><span class="spacer"></span><button class="text-btn ripple" id="tbl-cancel">Cancelar</button><button class="filled-btn ripple" id="tbl-insert">Insertar</button></div>
+  `, (body) => {
+    const clamp = (v, max) => Math.max(1, Math.min(max, Math.round(Number(v) || 1)));
+    const paint = (hc = tableUi.cols, hr = tableUi.rows) => {
+      body.querySelectorAll('.tbl-pick-cell').forEach((el) => el.classList.toggle('on', +el.dataset.c <= hc && +el.dataset.r <= hr));
+      body.querySelector('#tbl-size').textContent = `${hc} ${hc === 1 ? 'columna' : 'columnas'} × ${hr} ${hr === 1 ? 'fila' : 'filas'}`;
+    };
+    const sync = () => { body.querySelector('#tbl-cols').value = tableUi.cols; body.querySelector('#tbl-rows').value = tableUi.rows; paint(); };
+    body.querySelector('#tbl-header').checked = tableUi.header;
+    const picker = body.querySelector('#tbl-picker');
+    picker.addEventListener('pointerover', (e) => { const t = e.target.closest('.tbl-pick-cell'); if (t && e.pointerType === 'mouse') paint(+t.dataset.c, +t.dataset.r); });
+    picker.addEventListener('pointerleave', () => paint());
+    picker.addEventListener('click', (e) => {
+      const t = e.target.closest('.tbl-pick-cell');
+      if (!t) return;
+      tableUi.cols = +t.dataset.c; tableUi.rows = +t.dataset.r; sync();
+    });
+    body.querySelectorAll('[data-step]').forEach((b) => b.addEventListener('click', () => {
+      const k = b.dataset.step;
+      tableUi[k] = clamp(tableUi[k] + Number(b.dataset.d), k === 'cols' ? MAXC : MAXR);
+      sync();
+    }));
+    [['#tbl-cols', 'cols', MAXC], ['#tbl-rows', 'rows', MAXR]].forEach(([sel, k, max]) => {
+      const inp = body.querySelector(sel);
+      inp.addEventListener('input', () => { if (inp.value !== '') { tableUi[k] = clamp(inp.value, max); paint(); } });
+      inp.addEventListener('change', () => { tableUi[k] = clamp(inp.value, max); sync(); });
+    });
+    body.querySelector('#tbl-cancel').addEventListener('click', closeOverlays);
+    body.querySelector('#tbl-insert').addEventListener('click', () => {
+      tableUi.cols = clamp(body.querySelector('#tbl-cols').value, MAXC);
+      tableUi.rows = clamp(body.querySelector('#tbl-rows').value, MAXR);
+      tableUi.header = body.querySelector('#tbl-header').checked;
+      closeOverlays();
+      if (editor) insertTable(editor, tableUi);
+    });
+    sync();
+  });
+}
+
+// Panel "Tabla": todas las opciones de la tabla en la que está el cursor.
+function openTableSheet() {
+  if (!editor) return;
+  const ctx = tableContext(editor.state);
+  if (!ctx) { closeOverlays(); return; }
+  const scopes = Object.entries(SCOPE_LABEL).map(([k, l]) => `<button class="seg-btn ripple${tableUi.scope === k ? ' on' : ''}" data-scope="${k}">${l}</button>`).join('');
+  const hBtns = ALIGN_H.map((a) => `<button class="tool ripple${ctx.align === a ? ' active' : ''}" data-align="${a}" aria-label="${H_LABEL[a]}" title="${H_LABEL[a]}">${icon(`align${a}`)}</button>`).join('');
+  const vBtns = ALIGN_V.map((a) => `<button class="tool ripple${ctx.valign === a ? ' active' : ''}" data-valign="${a}" aria-label="${V_LABEL[a]}" title="${V_LABEL[a]}">${icon(`valign${a}`)}</button>`).join('');
+  const act = (cmd, label, extra = '') => `<button class="chip ripple tbl-act${extra}" data-act="${cmd}"><span>${label}</span></button>`;
+  openSheet(`
+    <h2 class="sheet-title">${icon('table')} Tabla <small class="ver">${ctx.cols} ${ctx.cols === 1 ? 'columna' : 'columnas'} × ${ctx.rows} ${ctx.rows === 1 ? 'fila' : 'filas'} · estás en la fila ${ctx.row}, columna ${ctx.col}</small></h2>
+    <div class="tbl-group"><h3>Filas</h3><div class="chips-row">${act('rowBefore', '+ Insertar arriba')}${act('rowAfter', '+ Insertar abajo')}${act('deleteRow', '− Eliminar fila', ' danger')}</div></div>
+    <div class="tbl-group"><h3>Columnas</h3><div class="chips-row">${act('colBefore', '+ Insertar a la izquierda')}${act('colAfter', '+ Insertar a la derecha')}${act('deleteCol', '− Eliminar columna', ' danger')}</div></div>
+    <div class="tbl-group"><h3>Alineación</h3>
+      <div class="seg" role="group" aria-label="Aplicar a">${scopes}</div>
+      <div class="tbl-align-row"><span>Horizontal</span>${hBtns}</div>
+      <div class="tbl-align-row"><span>Vertical</span>${vBtns}</div>
+    </div>
+    <div class="tbl-group"><h3>Encabezado</h3><div class="chips-row">${act('headerRow', `${ctx.headerRow ? '✓ ' : ''}Fila de encabezado`, ctx.headerRow ? ' chip-on' : '')}${act('headerCol', `${ctx.headerCol ? '✓ ' : ''}Columna de encabezado`, ctx.headerCol ? ' chip-on' : '')}</div></div>
+    <div class="tbl-group"><h3>Tabla</h3><div class="chips-row">${act('textBefore', 'Escribir arriba de la tabla')}${act('textAfter', 'Escribir debajo de la tabla')}${act('duplicate', 'Duplicar tabla')}${act('deleteTable', 'Eliminar tabla', ' danger')}</div></div>
+    <p class="sheet-text tbl-tip">Con teclado: Tab pasa a la celda siguiente y, en la última, agrega una fila. Podés pegar celdas copiadas de Excel o Google Sheets y se arma la tabla. Dentro de una celda podés usar casillas, listas y formato.</p>
+  `, (body) => {
+    const reopen = () => { if (editor && tableContext(editor.state)) openTableSheet(); else closeOverlays(); };
+    body.querySelectorAll('[data-scope]').forEach((b) => b.addEventListener('click', () => { tableUi.scope = b.dataset.scope; reopen(); }));
+    body.querySelectorAll('[data-align]').forEach((b) => b.addEventListener('click', () => {
+      setCellsAttrs(editor, tableUi.scope, { align: b.dataset.align }); reopen();
+      snackbar(`${SCOPE_LABEL[tableUi.scope]}: alineación ${H_LABEL[b.dataset.align].toLowerCase()}`);
+    }));
+    body.querySelectorAll('[data-valign]').forEach((b) => b.addEventListener('click', () => {
+      setCellsAttrs(editor, tableUi.scope, { valign: b.dataset.valign }); reopen();
+      snackbar(`${SCOPE_LABEL[tableUi.scope]}: alineación ${V_LABEL[b.dataset.valign].toLowerCase()}`);
+    }));
+    body.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', async () => {
+      const cmd = b.dataset.act;
+      if (cmd === 'deleteTable') {
+        closeOverlays();
+        runTableCommand(editor, cmd, { focus: false });
+        snackbar('Tabla eliminada', 'Deshacer', () => editor?.chain().focus().undo().run());
+        return;
+      }
+      if (cmd === 'textBefore' || cmd === 'textAfter') { closeOverlays(); runTableCommand(editor, cmd); return; }
+      runTableCommand(editor, cmd, { focus: false });
+      if (cmd === 'duplicate') snackbar('Tabla duplicada debajo');
+      reopen();
+    }));
+  });
 }
 
 /* ---------- Acciones del editor ---------- */
 function bindEditorUi() {
+  bindTableBar();
   // pointerdown + preventDefault: el foco queda en el texto y el teclado no se cierra.
   document.querySelectorAll('#toolbar [data-cmd]').forEach((b) => {
     b.addEventListener('pointerdown', (e) => e.preventDefault());
     b.addEventListener('click', () => {
       if (!editor) return;
       if (b.dataset.cmd === 'image') { $('#file-image').click(); return; }
+      if (b.dataset.cmd === 'table') { openTableUi(); return; }
       runCommand(editor, b.dataset.cmd);
     });
   });
@@ -951,7 +1117,7 @@ function showVersion() {
   const r = state.release;
   openSheet(`
     <h2 class="sheet-title">${BRAND} <small class="ver">v${esc(APP_VERSION)}</small></h2>
-    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · título automático para notas sin título</p>
+    <p class="sheet-text">${isNative ? 'App Android' : 'Versión web'} · tablas dentro de las notas</p>
     <p class="sheet-text">Archivo más reciente de la Release${r?.tag ? ` ${esc(r.tag)}` : ''}: <strong>${formatDate(r?.fileDate)}</strong></p>
     <a class="text-btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener">Ver Changelog</a>
   `);

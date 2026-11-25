@@ -1,4 +1,4 @@
-import { Editor } from '@tiptap/core';
+import { Editor, Extension } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import TaskList from '@tiptap/extension-task-list';
@@ -7,8 +7,13 @@ import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import Collaboration from '@tiptap/extension-collaboration';
 import Link from '@tiptap/extension-link';
+import Table from '@tiptap/extension-table';
+import TableRow from '@tiptap/extension-table-row';
+import TableHeader from '@tiptap/extension-table-header';
+import TableCell from '@tiptap/extension-table-cell';
+import { TableMap, CellSelection } from '@tiptap/pm/tables';
 import { ySyncPluginKey } from 'y-prosemirror';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 const rid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -124,6 +129,150 @@ export const ImagenAparte = Image.extend({
   },
 });
 
+/* ---------- Tablas ---------- */
+// Alineación de cada celda: horizontal (izquierda por defecto) y vertical (arriba por defecto).
+const H_ALIGN = ['left', 'center', 'right', 'justify'];
+const V_ALIGN = ['top', 'middle', 'bottom'];
+const alignAttrs = {
+  align: {
+    default: null,
+    parseHTML: (el) => { const v = el.style.textAlign || el.getAttribute('align'); return H_ALIGN.includes(v) && v !== 'left' ? v : null; },
+    renderHTML: (a) => (a.align ? { style: `text-align:${a.align}` } : {}),
+  },
+  valign: {
+    default: null,
+    parseHTML: (el) => { const v = el.style.verticalAlign || el.getAttribute('valign'); return V_ALIGN.includes(v) && v !== 'top' ? v : null; },
+    renderHTML: (a) => (a.valign ? { style: `vertical-align:${a.valign}` } : {}),
+  },
+};
+const Celda = TableCell.extend({ addAttributes() { return { ...this.parent?.(), ...alignAttrs }; } });
+const CeldaEncabezado = TableHeader.extend({ addAttributes() { return { ...this.parent?.(), ...alignAttrs }; } });
+
+// Pegar texto separado por tabulaciones (copiado de Excel, Sheets o un .txt) arma una tabla.
+// Si lo copiado trae HTML con <table>, lo resuelve el editor solo.
+const PegarTablaTSV = Extension.create({
+  name: 'pegarTablaTSV',
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      key: new PluginKey('pegarTablaTSV'),
+      props: {
+        handlePaste: (view, event) => {
+          const dt = event.clipboardData;
+          if (!dt) return false;
+          const html = dt.getData('text/html');
+          if (html && /<table/i.test(html)) return false;
+          const text = dt.getData('text/plain');
+          if (!text || !text.includes('\t')) return false;
+          if (tableContext(view.state)) return false;
+          const rows = text.replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n').map((l) => l.split('\t'));
+          const cols = Math.max(...rows.map((r) => r.length));
+          if (cols < 2) return false;
+          const s = view.state.schema;
+          const cell = (t) => s.nodes.tableCell.create(null, s.nodes.paragraph.create(null, t ? s.text(t) : null));
+          const table = s.nodes.table.create(null, rows.map((r) => s.nodes.tableRow.create(null, Array.from({ length: cols }, (_, j) => cell((r[j] || '').trim())))));
+          view.dispatch(view.state.tr.replaceSelectionWith(table).scrollIntoView());
+          return true;
+        },
+      },
+    })];
+  },
+});
+
+// Tabla en la que está el cursor: nodo, posición, mapa y celda actual (o null si no hay tabla).
+export function tableContext(state) {
+  const { $from } = state.selection;
+  let cellDepth = 0; let tableDepth = 0;
+  for (let d = $from.depth; d > 0; d--) {
+    const name = $from.node(d).type.name;
+    if (!cellDepth && (name === 'tableCell' || name === 'tableHeader')) cellDepth = d;
+    if (name === 'table') { tableDepth = d; break; }
+  }
+  if (!tableDepth) return null;
+  const table = $from.node(tableDepth);
+  const tableStart = $from.start(tableDepth);
+  const tablePos = $from.before(tableDepth);
+  const map = TableMap.get(table);
+  const cellPos = cellDepth ? $from.before(cellDepth) : null;
+  const rect = cellPos != null ? map.findCell(cellPos - tableStart) : { left: 0, top: 0, right: 1, bottom: 1 };
+  const cell = cellDepth ? $from.node(cellDepth) : null;
+  let headerRow = true;
+  table.firstChild?.forEach((c) => { if (c.type.name !== 'tableHeader') headerRow = false; });
+  let headerCol = true;
+  table.forEach((row) => { if (row.firstChild?.type.name !== 'tableHeader') headerCol = false; });
+  return {
+    table, tableStart, tablePos, map, rect, cellPos,
+    align: cell?.attrs.align || 'left', valign: cell?.attrs.valign || 'top',
+    rows: map.height, cols: map.width, row: rect.top + 1, col: rect.left + 1, headerRow, headerCol,
+  };
+}
+
+export const ALIGN_H = H_ALIGN;
+export const ALIGN_V = V_ALIGN;
+
+// Aplica atributos (alineación) a la celda, la fila, la columna o la tabla entera.
+// "cell" respeta la selección de varias celdas (arrastrando con el mouse).
+export function setCellsAttrs(editor, scope, attrs) {
+  const st = editor.state;
+  const ctx = tableContext(st);
+  if (!ctx) return false;
+  let positions = [];
+  if (scope === 'cell') {
+    if (st.selection instanceof CellSelection) st.selection.forEachCell((_n, pos) => positions.push(pos));
+    else if (ctx.cellPos != null) positions = [ctx.cellPos];
+  } else {
+    const { map, rect } = ctx;
+    const r = scope === 'row' ? { left: 0, right: map.width, top: rect.top, bottom: rect.bottom }
+      : scope === 'col' ? { left: rect.left, right: rect.right, top: 0, bottom: map.height }
+        : { left: 0, right: map.width, top: 0, bottom: map.height };
+    positions = map.cellsInRect(r).map((p) => p + ctx.tableStart);
+  }
+  const clean = {};
+  Object.entries(attrs).forEach(([k, v]) => { clean[k] = (k === 'align' && v === 'left') || (k === 'valign' && v === 'top') ? null : v; });
+  const tr = st.tr;
+  positions.forEach((pos) => { const n = tr.doc.nodeAt(pos); if (n) tr.setNodeMarkup(pos, null, { ...n.attrs, ...clean }); });
+  if (tr.docChanged) editor.view.dispatch(tr);
+  return true;
+}
+
+// Inserta una tabla nueva de columnas × filas
+export function insertTable(editor, { rows, cols, header }) {
+  return editor.chain().focus().insertTable({ rows, cols, withHeaderRow: !!header }).run();
+}
+
+// Comandos de tabla (barra de tabla y panel "Tabla"). focus = false cuando se usan desde el panel.
+export function runTableCommand(editor, cmd, { focus = true } = {}) {
+  const st = editor.state;
+  const ctx = tableContext(st);
+  if (!ctx) return false;
+  const c = focus ? editor.chain().focus() : editor.chain();
+  switch (cmd) {
+    case 'rowBefore': return c.addRowBefore().run();
+    case 'rowAfter': return c.addRowAfter().run();
+    case 'colBefore': return c.addColumnBefore().run();
+    case 'colAfter': return c.addColumnAfter().run();
+    case 'deleteRow': return ctx.rows <= 1 ? c.deleteTable().run() : c.deleteRow().run();
+    case 'deleteCol': return ctx.cols <= 1 ? c.deleteTable().run() : c.deleteColumn().run();
+    case 'deleteTable': return c.deleteTable().run();
+    case 'headerRow': return c.toggleHeaderRow().run();
+    case 'headerCol': return c.toggleHeaderColumn().run();
+    case 'duplicate': {
+      const end = ctx.tablePos + ctx.table.nodeSize;
+      editor.view.dispatch(st.tr.insert(end, ctx.table.type.create(ctx.table.attrs, ctx.table.content)).scrollIntoView());
+      return true;
+    }
+    case 'textAfter':
+    case 'textBefore': {
+      const at = cmd === 'textAfter' ? ctx.tablePos + ctx.table.nodeSize : ctx.tablePos;
+      const tr = st.tr.insert(at, st.schema.nodes.paragraph.create());
+      tr.setSelection(TextSelection.create(tr.doc, at + 1)).scrollIntoView();
+      editor.view.dispatch(tr);
+      if (focus) editor.view.focus();
+      return true;
+    }
+    default: return false;
+  }
+}
+
 // Extensiones del contenido (las mismas para mostrar versiones y exportar)
 export function contentExtensions({ resolveImage, reminderIds } = {}) {
   return [
@@ -133,6 +282,11 @@ export function contentExtensions({ resolveImage, reminderIds } = {}) {
     TaskItemConId.configure({ nested: true, reminderIds }),
     ImagenAparte.configure({ inline: false, allowBase64: true, resolve: resolveImage }),
     Link.configure({ autolink: true, linkOnPaste: true, openOnClick: false, HTMLAttributes: { rel: 'noopener noreferrer nofollow', target: '_blank' } }),
+    // Tablas: en pantallas chicas cada columna mide al menos 64 px y la tabla se desplaza de costado.
+    Table.configure({ resizable: true, cellMinWidth: 64, lastColumnResizable: true, allowTableNodeSelection: false, HTMLAttributes: { class: 'nota-tabla' } }),
+    TableRow,
+    CeldaEncabezado,
+    Celda,
   ];
 }
 
@@ -143,6 +297,7 @@ export function createEditor(element, { ydoc, onUpdate, onState, onCreate, remin
     extensions: [
       ...contentExtensions({ resolveImage, reminderIds }),
       Placeholder.configure({ placeholder: 'Escribí tu nota…' }),
+      PegarTablaTSV,
       Collaboration.configure({ document: ydoc, field: 'default' }),
     ],
     editorProps: {
@@ -182,20 +337,22 @@ export function runCommand(editor, cmd) {
 
 export function isActive(editor, cmd) {
   if (cmd === 'heading') return editor.isActive('heading');
+  if (cmd === 'table') return editor.isActive('table');
   if (['bold', 'italic', 'underline', 'bulletList', 'orderedList', 'taskList'].includes(cmd)) return editor.isActive(cmd);
   return false;
 }
 
 // Datos derivados para la lista: vista previa, casillas y miniatura.
 export function summarize(json, text) {
-  let done = 0; let total = 0; let thumb = null;
+  let done = 0; let total = 0; let thumb = null; let tables = 0;
   const walk = (node) => {
     if (node.type === 'taskItem') { total++; if (node.attrs?.checked) done++; }
+    if (node.type === 'table') tables++;
     if (node.type === 'image' && !thumb) thumb = node.attrs?.src || null;
     node.content?.forEach(walk);
   };
   walk(json);
-  return { preview: text.trim().slice(0, 500), text: text.trim().slice(0, 20000), checks: { done, total }, thumb };
+  return { preview: text.trim().slice(0, 500), text: text.trim().slice(0, 20000), checks: { done, total }, thumb, tables };
 }
 
 // Reduce la foto (máx. 1280 px, WebP) para que pese poco: pensado para guardarla luego en Firestore.
