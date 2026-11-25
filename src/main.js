@@ -6,7 +6,7 @@ import {
   refreshReminderMarks, currentTaskItem, taskItems, checkTaskItem, compressDataUrl, noteLinks, contentExtensions,
   tableContext, setCellsAttrs, insertTable, runTableCommand, ALIGN_H, ALIGN_V,
   tableSizes, setColumnWidth, setColumnsMode, setRowHeight, setRowsMode,
-  copyTablePart, insertCopied, duplicateTablePart, getTableClip,
+  copyTablePart, insertCopied, duplicateTablePart, getTableClip, CELL_BG, sortTable, placeCursorAt,
 } from './editor.js';
 import * as Y from 'yjs';
 import { generateHTML, generateJSON } from '@tiptap/core';
@@ -117,6 +117,7 @@ function hideSnack() { $('#snackbar').classList.remove('show'); }
 /* ---------- Menú, hoja inferior y fondo oscuro ---------- */
 function openMenu(anchor, items) {
   const menu = $('#menu');
+  menu.classList.remove('cell-menu');
   menu.innerHTML = '';
   items.forEach((it) => {
     if (it.divider) { menu.insertAdjacentHTML('beforeend', '<div class="menu-divider"></div>'); return; }
@@ -181,7 +182,7 @@ function closeOverlays() {
   $('#scrim').classList.remove('show', 'clear');
   return closed;
 }
-$('#scrim').addEventListener('click', closeOverlays);
+$('#scrim').addEventListener('click', () => { if (Date.now() - cellMenuAt > 400) closeOverlays(); });
 
 const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -834,6 +835,8 @@ function updateTableBar(ed) {
   };
   setIcon('[data-tbl="alignH"]', `align${ctx.align}`, `Alineación horizontal: ${H_LABEL[ctx.align]} (tocá para cambiar)`);
   setIcon('[data-tbl="alignV"]', `valign${ctx.valign}`, `Alineación vertical: ${V_LABEL[ctx.valign]} (tocá para cambiar)`);
+  const cb = bar.querySelector('[data-tbl="color"]');
+  if (cb) { if (ctx.bg) cb.dataset.bg = ctx.bg; else delete cb.dataset.bg; }
 }
 
 function bindTableBar() {
@@ -846,6 +849,7 @@ function bindTableBar() {
       if (!ctx) return;
       if (cmd === 'menu') { openTableSheet(); return; }
       if (cmd === 'size') { openTableSheet({ scrollTo: 'size' }); return; }
+      if (cmd === 'color') { openTableSheet({ scrollTo: 'cells' }); return; }
       if (cmd === 'alignH') {
         const next = ALIGN_H[(ALIGN_H.indexOf(ctx.align) + 1) % ALIGN_H.length];
         setCellsAttrs(editor, 'cell', { align: next });
@@ -943,6 +947,8 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
   const act = (cmd, label, extra = '') => `<button class="chip ripple tbl-act${extra}" data-act="${cmd}"><span>${label}</span></button>`;
   const seg = (kind, cur) => Object.entries(SIZE_LABEL).map(([k, l]) => `<button class="seg-btn ripple${cur === k ? ' on' : ''}" data-size="${kind}" data-mode="${k}">${l}</button>`).join('');
   const stepper = (kind, value, label) => `<div class="tbl-stepper tbl-size-step"><span>${label}</span><button class="step-btn ripple" data-sstep="${kind}" data-d="-1" aria-label="Menos">−</button><input data-sval="${kind}" type="number" inputmode="numeric" value="${value}"><button class="step-btn ripple" data-sstep="${kind}" data-d="1" aria-label="Más">+</button><em>px</em></div>`;
+  const bgBtns = `<button class="tbl-swatch tbl-swatch-none ripple${!ctx.bg ? ' on' : ''}" data-bgset="" aria-label="Sin color" title="Sin color">${icon('block')}</button>`
+    + CELL_BG.map(([k, l]) => `<button class="tbl-swatch ripple${ctx.bg === k ? ' on' : ''}" data-bg="${k}" data-bgset="${k}" aria-label="${l}" title="${l}">${ctx.bg === k ? icon('check') : ''}</button>`).join('');
   const clipRow = clip?.kind === 'row'; const clipCol = clip?.kind === 'col';
   const clipNote = clip ? `<p class="sheet-text tbl-clip">${icon('copy')} Copiada: ${clipRow ? `fila ${clip.index}` : `columna ${clip.index}`} (${clip.cells.length} celdas). Se puede insertar en esta tabla o en otra, también de otra nota.</p>` : '';
   openSheet(`
@@ -958,14 +964,18 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
       <p class="sheet-text tbl-size-tip">${SIZE_TIP.row[sz.rowMode]}</p>
       ${stepper('row', sz.rowHeight, `Fila ${ctx.row}`)}
     </div>
-    <div class="tbl-group"><h3>Alineación</h3>
-      <div class="seg" role="group" aria-label="Aplicar a">${scopes}</div>
+    <div class="tbl-group" id="tbl-cells-group"><h3>Color de fondo y alineación</h3>
+      <div class="tbl-size-row"><span>Aplicar a</span><div class="seg" role="group" aria-label="Aplicar a">${scopes}</div></div>
+      <div class="tbl-swatches" role="group" aria-label="Color de fondo">${bgBtns}</div>
       <div class="tbl-align-row"><span>Horizontal</span>${hBtns}</div>
       <div class="tbl-align-row"><span>Vertical</span>${vBtns}</div>
     </div>
+    <div class="tbl-group" id="tbl-sort-group"><h3>Ordenar las filas por la columna ${ctx.col}</h3><div class="chips-row">${act('sortTextAsc', 'A → Z')}${act('sortTextDesc', 'Z → A')}${act('sortNumAsc', '1 → 9 (números)')}${act('sortNumDesc', '9 → 1 (números)')}</div>
+      <p class="sheet-text tbl-size-tip">${ctx.headerRow ? 'La fila de encabezado queda arriba, sin moverse.' : 'Se ordenan todas las filas (no hay fila de encabezado).'} Las celdas vacías van al final. Para elegir otra columna, ubicá el cursor en ella.</p>
+    </div>
     <div class="tbl-group"><h3>Encabezado</h3><div class="chips-row">${act('headerRow', `${ctx.headerRow ? '✓ ' : ''}Fila de encabezado`, ctx.headerRow ? ' chip-on' : '')}${act('headerCol', `${ctx.headerCol ? '✓ ' : ''}Columna de encabezado`, ctx.headerCol ? ' chip-on' : '')}</div></div>
     <div class="tbl-group"><h3>Tabla</h3><div class="chips-row">${act('textBefore', 'Escribir arriba de la tabla')}${act('textAfter', 'Escribir debajo de la tabla')}${act('duplicate', 'Duplicar tabla')}${act('deleteTable', 'Eliminar tabla', ' danger')}</div></div>
-    <p class="sheet-text tbl-tip">Con teclado: Tab pasa a la celda siguiente y, en la última, agrega una fila. Podés pegar celdas copiadas de Excel o Google Sheets y se arma la tabla. Dentro de una celda podés usar casillas, listas y formato. En la PC, el ancho de una columna también se cambia arrastrando su borde.</p>
+    <p class="sheet-text tbl-tip">Con teclado: Tab pasa a la celda siguiente y, en la última, agrega una fila. Podés pegar celdas copiadas de Excel o Google Sheets y se arma la tabla. Dentro de una celda podés usar casillas, listas y formato. En la PC, el ancho de una columna también se cambia arrastrando su borde. En el celular, mantené apretada una celda para ver su menú (en la PC, clic derecho; Shift + clic derecho abre el menú del navegador).</p>
   `, (body) => {
     // Al volver a dibujar el panel se mantiene el desplazamiento (si no, salta arriba en cada toque).
     const reopen = () => {
@@ -981,6 +991,11 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
     body.querySelectorAll('[data-valign]').forEach((b) => b.addEventListener('click', () => {
       setCellsAttrs(editor, tableUi.scope, { valign: b.dataset.valign }); reopen();
       snackbar(`${SCOPE_LABEL[tableUi.scope]}: alineación ${V_LABEL[b.dataset.valign].toLowerCase()}`);
+    }));
+    body.querySelectorAll('[data-bgset]').forEach((b) => b.addEventListener('click', () => {
+      const k = b.dataset.bgset || null;
+      setCellsAttrs(editor, tableUi.scope, { bg: k }); reopen();
+      snackbar(`${SCOPE_LABEL[tableUi.scope]}: ${k ? `fondo ${BG_LABEL[k].toLowerCase()}` : 'sin color de fondo'}`);
     }));
     // Tamaño: modo de ancho y de alto, y − / + (o número) para la columna y la fila actuales.
     body.querySelectorAll('[data-size]').forEach((b) => b.addEventListener('click', () => {
@@ -1023,6 +1038,7 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
         reopen();
         return;
       }
+      if (cmd.startsWith('sort')) { doSort(cmd); reopen(); return; }
       runTableCommand(editor, cmd, { focus: false });
       if (cmd === 'duplicate') snackbar('Tabla duplicada debajo');
       reopen();
@@ -1030,12 +1046,105 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
   });
   if (keepScroll) $('#sheet').scrollTop = prevScroll;
   else if (scrollTo === 'size') $('#tbl-size-group')?.scrollIntoView({ block: 'start' });
+  else if (scrollTo === 'cells') $('#tbl-cells-group')?.scrollIntoView({ block: 'start' });
+  else if (scrollTo === 'sort') $('#tbl-sort-group')?.scrollIntoView({ block: 'start' });
   else $('#sheet').scrollTop = 0;
+}
+
+const BG_LABEL = {};
+CELL_BG.forEach(([k, l]) => { BG_LABEL[k] = l; });
+const SORT_CMDS = {
+  sortTextAsc: ['asc', 'text', 'A → Z'], sortTextDesc: ['desc', 'text', 'Z → A'],
+  sortNumAsc: ['asc', 'number', 'de menor a mayor'], sortNumDesc: ['desc', 'number', 'de mayor a menor'],
+};
+function doSort(cmd) {
+  const [dir, kind, label] = SORT_CMDS[cmd];
+  const col = tableContext(editor.state)?.col;
+  const r = sortTable(editor, dir, kind);
+  if (r.reason === 'merged') snackbar('No se puede ordenar: la tabla tiene celdas combinadas');
+  else if (r.reason === 'few') snackbar('No hay filas suficientes para ordenar');
+  else if (r.ok && !r.moved) snackbar('La tabla ya estaba en ese orden');
+  else if (r.ok) snackbar(`Filas ordenadas por la columna ${col} (${label})`, 'Deshacer', () => editor?.chain().focus().undo().run());
+}
+
+// Menú de la celda: al mantener apretada una celda (celular) o con clic derecho (PC; Shift + clic derecho = menú del navegador).
+function openCellMenu(x, y) {
+  if (!editor) return;
+  const ctx = tableContext(editor.state);
+  if (!ctx) return;
+  haptic();
+  const clip = getTableClip();
+  const run = (fn) => () => { if (editor && tableContext(editor.state)) fn(); };
+  const items = [
+    { label: `${icon('palette')} Color de fondo…`, onClick: run(() => openTableSheet({ scrollTo: 'cells' })) },
+    { divider: true },
+    { label: `Copiar fila ${ctx.row}`, onClick: run(() => { const c = copyTablePart(editor, 'row'); if (c) snackbar(`Fila ${c.index} copiada`); }) },
+    { label: `Copiar columna ${ctx.col}`, onClick: run(() => { const c = copyTablePart(editor, 'col'); if (c) snackbar(`Columna ${c.index} copiada`); }) },
+  ];
+  if (clip?.kind === 'row') {
+    items.push({ label: '⤒ Insertar fila copiada arriba', onClick: run(() => { insertCopied(editor, 'before', { focus: false }); snackbar('Fila copiada insertada'); }) });
+    items.push({ label: '⤓ Insertar fila copiada abajo', onClick: run(() => { insertCopied(editor, 'after', { focus: false }); snackbar('Fila copiada insertada'); }) });
+  } else if (clip?.kind === 'col') {
+    items.push({ label: '⇤ Insertar columna copiada a la izquierda', onClick: run(() => { insertCopied(editor, 'before', { focus: false }); snackbar('Columna copiada insertada'); }) });
+    items.push({ label: '⇥ Insertar columna copiada a la derecha', onClick: run(() => { insertCopied(editor, 'after', { focus: false }); snackbar('Columna copiada insertada'); }) });
+  }
+  items.push(
+    { label: 'Duplicar fila', onClick: run(() => { duplicateTablePart(editor, 'row', { focus: false }); snackbar('Fila duplicada debajo'); }) },
+    { label: 'Duplicar columna', onClick: run(() => { duplicateTablePart(editor, 'col', { focus: false }); snackbar('Columna duplicada a la derecha'); }) },
+    { divider: true },
+    { label: `Ordenar por la columna ${ctx.col}: A → Z`, onClick: run(() => doSort('sortTextAsc')) },
+    { label: `Ordenar por la columna ${ctx.col}: Z → A`, onClick: run(() => doSort('sortTextDesc')) },
+    { label: 'Ordenar con números…', onClick: run(() => openTableSheet({ scrollTo: 'sort' })) },
+    { divider: true },
+    { label: '↔ Tamaño…', onClick: run(() => openTableSheet({ scrollTo: 'size' })) },
+    { label: `${icon('table')} Todas las opciones de la tabla…`, onClick: run(() => openTableSheet()) },
+    { divider: true },
+    { label: '− Eliminar fila', onClick: run(() => { runTableCommand(editor, 'deleteRow', { focus: false }); snackbar('Fila eliminada', 'Deshacer', () => editor?.chain().focus().undo().run()); }) },
+    { label: '− Eliminar columna', onClick: run(() => { runTableCommand(editor, 'deleteCol', { focus: false }); snackbar('Columna eliminada', 'Deshacer', () => editor?.chain().focus().undo().run()); }) },
+  );
+  openMenu({ getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y, width: 0, height: 0 }) }, items);
+  $('#menu').classList.add('cell-menu');
+  cellMenuAt = Date.now();
+}
+let cellMenuAt = 0;
+
+function bindCellPress() {
+  const host = $('#editor');
+  const canUse = (target) => editor && editor.isEditable && !$('#toolbar').hidden && target.closest?.('td, th');
+  let timer = null; let sx = 0; let sy = 0; let fired = false;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  const open = (x, y) => {
+    if (Date.now() - cellMenuAt < 700) return; // ya se abrió (touch + contextmenu)
+    if (placeCursorAt(editor, x, y)) openCellMenu(x, y);
+  };
+  // Celular: mantener apretado ~0,5 s sin mover el dedo.
+  host.addEventListener('touchstart', (e) => {
+    fired = false;
+    if (e.touches.length !== 1 || !canUse(e.target)) { cancel(); return; }
+    const t = e.touches[0]; sx = t.clientX; sy = t.clientY;
+    cancel();
+    timer = setTimeout(() => { timer = null; fired = true; open(sx, sy); }, 520);
+  }, { passive: true });
+  host.addEventListener('touchmove', (e) => {
+    const t = e.touches[0];
+    if (t && (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10)) cancel();
+  }, { passive: true });
+  // Al soltar después de abrir el menú, se evita el "clic" (cerraría el menú al instante).
+  host.addEventListener('touchend', (e) => { cancel(); if (fired) { e.preventDefault(); fired = false; } });
+  host.addEventListener('touchcancel', cancel);
+  // Android también dispara "contextmenu" al mantener apretado (y la PC con el clic derecho).
+  host.addEventListener('contextmenu', (e) => {
+    if (e.shiftKey || !canUse(e.target)) return;
+    e.preventDefault();
+    cancel();
+    open(e.clientX, e.clientY);
+  });
 }
 
 /* ---------- Acciones del editor ---------- */
 function bindEditorUi() {
   bindTableBar();
+  bindCellPress();
   // pointerdown + preventDefault: el foco queda en el texto y el teclado no se cierra.
   document.querySelectorAll('#toolbar [data-cmd]').forEach((b) => {
     b.addEventListener('pointerdown', (e) => e.preventDefault());

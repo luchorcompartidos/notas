@@ -8,9 +8,15 @@ import { isNative } from './native.js';
 /* ---------- Contenido de la nota como JSON de ProseMirror ---------- */
 const inline = (n) => (n.type === 'text' ? n.text || '' : n.type === 'hardBreak' ? '\n' : (n.content || []).map(inline).join(''));
 
-// Tablas: filas → celdas (cada celda con sus bloques), con la alineación y si es encabezado.
+// Tablas: filas → celdas (cada celda con sus bloques), con la alineación, el color de fondo y si es encabezado.
+// Colores de fondo de celda para exportar (los mismos del tema claro; en editor.js está la paleta CELL_BG).
+const CELL_BG_HEX = {
+  yellow: 'FFF3B0', orange: 'FFE0B2', red: 'FFCDD2', pink: 'F8BBD0', purple: 'E1BEE7',
+  blue: 'BBDEFB', cyan: 'B2EBF2', green: 'C8E6C9', gray: 'E0E0E0',
+};
 const tableRows = (n) => (n.content || []).map((row) => (row.content || []).map((cell) => ({
   blocks: cell.content || [], header: cell.type === 'tableHeader', align: cell.attrs?.align || 'left', valign: cell.attrs?.valign || 'top',
+  bg: CELL_BG_HEX[cell.attrs?.bg] || null,
 })));
 const cellPlain = (cell) => blocksToText(cell.blocks).map((l) => l.trim()).filter(Boolean).join(' / ');
 
@@ -155,7 +161,7 @@ export async function toDocx(notes) {
             const c = r[j];
             let kids = c ? await blocks(c.blocks, 0, H_DOCX[c.align]) : [];
             if (!kids.length) kids = [new Paragraph({ children: [] })];
-            cells.push(new TableCell({ children: kids, verticalAlign: V_DOCX[c?.valign || 'top'], shading: c?.header ? { fill: 'EEEEEE' } : undefined }));
+            cells.push(new TableCell({ children: kids, verticalAlign: V_DOCX[c?.valign || 'top'], shading: c?.bg ? { fill: c.bg } : c?.header ? { fill: 'EEEEEE' } : undefined }));
           }
           trs.push(new TableRow({ children: cells, tableHeader: r.every((c) => c.header) }));
         }
@@ -245,7 +251,8 @@ export async function toPdf(notes) {
           const top = y;
           cells.forEach(({ c, lines }, j) => {
             const x = M + ind + j * cw;
-            if (c?.header) { pdf.setFillColor(238); pdf.rect(x, top, cw, rh, 'F'); }
+            if (c?.bg) { pdf.setFillColor(parseInt(c.bg.slice(0, 2), 16), parseInt(c.bg.slice(2, 4), 16), parseInt(c.bg.slice(4, 6), 16)); pdf.rect(x, top, cw, rh, 'F'); }
+            else if (c?.header) { pdf.setFillColor(238); pdf.rect(x, top, cw, rh, 'F'); }
             pdf.rect(x, top, cw, rh);
             pdf.setFont('helvetica', c?.header ? 'bold' : 'normal'); pdf.setTextColor(20);
             const h = lines.length * lh;

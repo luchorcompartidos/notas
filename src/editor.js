@@ -145,8 +145,22 @@ const alignAttrs = {
     renderHTML: (a) => (a.valign ? { style: `vertical-align:${a.valign}` } : {}),
   },
 };
-const Celda = TableCell.extend({ addAttributes() { return { ...this.parent?.(), ...alignAttrs }; } });
-const CeldaEncabezado = TableHeader.extend({ addAttributes() { return { ...this.parent?.(), ...alignAttrs }; } });
+// Color de fondo de la celda: se guarda la clave de la paleta (los colores reales cambian con el tema claro/oscuro).
+export const CELL_BG = [
+  ['yellow', 'Amarillo'], ['orange', 'Naranja'], ['red', 'Rojo'], ['pink', 'Rosa'], ['purple', 'Violeta'],
+  ['blue', 'Azul'], ['cyan', 'Celeste'], ['green', 'Verde'], ['gray', 'Gris'],
+];
+const BG_KEYS = CELL_BG.map(([k]) => k);
+const cellAttrs = {
+  ...alignAttrs,
+  bg: {
+    default: null,
+    parseHTML: (el) => { const v = el.getAttribute('data-bg'); return BG_KEYS.includes(v) ? v : null; },
+    renderHTML: (a) => (a.bg ? { 'data-bg': a.bg } : {}),
+  },
+};
+const Celda = TableCell.extend({ addAttributes() { return { ...this.parent?.(), ...cellAttrs }; } });
+const CeldaEncabezado = TableHeader.extend({ addAttributes() { return { ...this.parent?.(), ...cellAttrs }; } });
 
 // Alto de fila (px). Funciona como alto mínimo: si el contenido ocupa más, la fila crece. null = automático.
 const Fila = TableRow.extend({
@@ -271,7 +285,7 @@ export function tableContext(state) {
   table.forEach((row) => { if (row.firstChild?.type.name !== 'tableHeader') headerCol = false; });
   return {
     table, tableStart, tablePos, map, rect, cellPos,
-    align: cell?.attrs.align || 'left', valign: cell?.attrs.valign || 'top',
+    align: cell?.attrs.align || 'left', valign: cell?.attrs.valign || 'top', bg: cell?.attrs.bg || null,
     rows: map.height, cols: map.width, row: rect.top + 1, col: rect.left + 1, headerRow, headerCol,
   };
 }
@@ -279,7 +293,7 @@ export function tableContext(state) {
 export const ALIGN_H = H_ALIGN;
 export const ALIGN_V = V_ALIGN;
 
-// Aplica atributos (alineación) a la celda, la fila, la columna o la tabla entera.
+// Aplica atributos (alineación, color de fondo) a la celda, la fila, la columna o la tabla entera.
 // "cell" respeta la selección de varias celdas (arrastrando con el mouse).
 export function setCellsAttrs(editor, scope, attrs) {
   const st = editor.state;
@@ -297,7 +311,7 @@ export function setCellsAttrs(editor, scope, attrs) {
     positions = map.cellsInRect(r).map((p) => p + ctx.tableStart);
   }
   const clean = {};
-  Object.entries(attrs).forEach(([k, v]) => { clean[k] = (k === 'align' && v === 'left') || (k === 'valign' && v === 'top') ? null : v; });
+  Object.entries(attrs).forEach(([k, v]) => { clean[k] = (k === 'align' && v === 'left') || (k === 'valign' && v === 'top') || (k === 'bg' && !BG_KEYS.includes(v)) ? null : v; });
   const tr = st.tr;
   positions.forEach((pos) => { const n = tr.doc.nodeAt(pos); if (n) tr.setNodeMarkup(pos, null, { ...n.attrs, ...clean }); });
   if (tr.docChanged) editor.view.dispatch(tr);
@@ -489,14 +503,14 @@ export function copyTablePart(editor, kind) {
 
 // Arma una celda nueva con el contenido copiado (o vacía) y el tipo/ancho del lugar donde va.
 function makeCell(schema, json, type, colwidth) {
-  let content = null; let align = null; let valign = null;
+  let content = null; let align = null; let valign = null; let bg = null;
   if (json) {
     try {
       const src = schema.nodeFromJSON(json);
-      content = src.content; align = src.attrs.align || null; valign = src.attrs.valign || null;
+      content = src.content; align = src.attrs.align || null; valign = src.attrs.valign || null; bg = src.attrs.bg || null;
     } catch { content = null; }
   }
-  const attrs = { colspan: 1, rowspan: 1, colwidth: colwidth || null, align, valign };
+  const attrs = { colspan: 1, rowspan: 1, colwidth: colwidth || null, align, valign, bg };
   return (content && content.size ? type.create(attrs, content) : null) || type.createAndFill(attrs);
 }
 
@@ -545,6 +559,90 @@ export function duplicateTablePart(editor, kind, opts) {
   const ok = insertCopied(editor, 'after', opts);
   tableClip = prev;
   return ok;
+}
+
+/* ---------- Tablas: ordenar por una columna ---------- */
+// Número escrito como en Argentina (1.234,56) o con punto decimal (1234.56); también con $, % o espacios.
+// Un solo punto seguido de exactamente 3 cifras se toma como separador de miles (1.234 = 1234).
+export function parseCellNumber(text) {
+  const m = String(text || '').replace(/\s/g, '').match(/-?[\d.,]*\d/);
+  if (!m) return null;
+  let t = m[0];
+  const lastDot = t.lastIndexOf('.'); const lastComma = t.lastIndexOf(',');
+  if (lastDot >= 0 && lastComma >= 0) {
+    t = lastComma > lastDot ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '');
+  } else if (lastComma >= 0) {
+    t = t.match(/,/g).length > 1 ? t.replace(/,/g, '') : t.replace(',', '.'); // 1,234,567 o 12,5
+  } else if (lastDot >= 0) {
+    if (t.match(/\./g).length > 1 || /^-?\d{1,3}\.\d{3}$/.test(t)) t = t.replace(/\./g, '');
+  }
+  const n = parseFloat(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+let collator = null;
+const compareText = (a, b) => {
+  if (!collator) { try { collator = new Intl.Collator('es', { numeric: true, sensitivity: 'base' }); } catch { collator = { compare: (x, y) => (x < y ? -1 : x > y ? 1 : 0) }; } }
+  return collator.compare(a, b);
+};
+
+// Ordena las filas de la tabla por la columna del cursor. dir: 'asc' | 'desc'; kind: 'text' | 'number'.
+// La fila de encabezado (si la hay) no se mueve. Las celdas vacías (o sin número) van siempre al final.
+// Devuelve { ok, moved, reason } (reason: 'merged' si hay celdas combinadas, 'few' si hay menos de 2 filas para ordenar).
+export function sortTable(editor, dir = 'asc', kind = 'text', { focus = false } = {}) {
+  const st = editor.state;
+  const ctx = tableContext(st);
+  if (!ctx) return { ok: false, reason: 'none' };
+  const { table, map, tablePos, rect } = ctx;
+  let merged = false;
+  table.descendants((c) => { if (c.attrs.colspan > 1 || c.attrs.rowspan > 1) merged = true; return c.type.name === 'tableRow'; });
+  if (merged) return { ok: false, reason: 'merged' };
+  const col = rect.left;
+  const first = ctx.headerRow ? 1 : 0;
+  const rows = [];
+  for (let r = first; r < table.childCount; r++) {
+    const text = table.nodeAt(map.map[r * map.width + col]).textContent.trim();
+    rows.push({ r, node: table.child(r), text, num: kind === 'number' ? parseCellNumber(text) : null });
+  }
+  if (rows.length < 2) return { ok: false, reason: 'few' };
+  const sign = dir === 'desc' ? -1 : 1;
+  const sorted = rows.slice().sort((a, b) => {
+    const ea = kind === 'number' ? a.num == null : !a.text; const eb = kind === 'number' ? b.num == null : !b.text;
+    if (ea || eb) return ea === eb ? a.r - b.r : ea ? 1 : -1;
+    const d = kind === 'number' ? a.num - b.num : compareText(a.text, b.text);
+    return d ? d * sign : a.r - b.r; // a igual valor se mantiene el orden que tenían
+  });
+  const moved = sorted.filter((x, i) => x.r !== rows[i].r).length;
+  if (!moved) return { ok: true, moved: 0 };
+  const kids = [];
+  for (let r = 0; r < first; r++) kids.push(table.child(r));
+  sorted.forEach((x) => kids.push(x.node));
+  const tr = st.tr.replaceWith(tablePos, tablePos + table.nodeSize, table.type.create(table.attrs, kids));
+  // El cursor queda en la misma columna, en la primera fila ordenada.
+  const nt = tr.doc.nodeAt(tablePos);
+  const nmap = TableMap.get(nt);
+  const cell = tablePos + 1 + nmap.map[first * nmap.width + col];
+  tr.setSelection(TextSelection.near(tr.doc.resolve(cell + 1)));
+  editor.view.dispatch(tr.scrollIntoView());
+  if (focus) editor.view.focus();
+  return { ok: true, moved };
+}
+
+// Mantener apretada una celda (o clic derecho): ubica el cursor en esa celda, salvo que ya esté dentro
+// de una selección de varias celdas. Devuelve true si el punto está en una tabla.
+export function placeCursorAt(editor, x, y) {
+  const view = editor.view;
+  const hit = view.posAtCoords({ left: x, top: y });
+  if (!hit) return false;
+  const st = view.state;
+  if (st.selection instanceof CellSelection) {
+    let inside = false;
+    st.selection.forEachCell((n, pos) => { if (hit.pos > pos && hit.pos < pos + n.nodeSize) inside = true; });
+    if (inside) return true;
+  }
+  const sel = TextSelection.near(st.doc.resolve(hit.pos));
+  view.dispatch(st.tr.setSelection(sel));
+  return !!tableContext(view.state);
 }
 
 // Extensiones del contenido (las mismas para mostrar versiones y exportar)
