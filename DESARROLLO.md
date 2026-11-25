@@ -15,30 +15,34 @@
 | URL publicada | https://luchorcompartidos.github.io/notas/ |
 | Tipo | Web + Android (Capacitor, un solo código) |
 | Estado | En uso |
-| Última versión (Release) | v0.2.0 — 2026-11-25 |
+| Última versión (Release) | v0.2.1 — 2026-11-25 |
 | Se conecta con | Firebase, proyecto **notas-pro-2026** (plan gratuito Spark; Firestore en modo producción) |
-| Dispositivos viejos (Android 5/6) | **Sí**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio. **Diagnóstico hecho (2026-11-25)**; la adaptación va por partes (ver secciones 2 y 3) |
+| Dispositivos viejos (Android 5/6) | **Sí**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio. Parte 1 hecha (v0.2.1, web compatible con WebView viejas); falta la Parte 2 (APK con mínimo Android 5) |
 
 ## 2. Etapa actual
-**APK para dispositivos viejos (Android 5/6): diagnóstico hecho, falta elegir el esquema y hacer las partes.**
-- Objetivo: que ANote... se instale y ande en la tablet Android 6.0.1 (32 bits) y en la Bangho AERO J1216 (Android 5.0, Intel x86).
+**APK para dispositivos viejos (Android 5/6): Parte 1 hecha (v0.2.1). Sigue la Parte 2.**
+- Objetivo: que ANote... se instale y ande en la tablet Android 6.0.1 (32 bits) y en la Bangho AERO J1216 (Android 5.0, Intel x86), sin perjudicar en nada el APK de los celulares actuales.
 - Diagnóstico (2026-11-25), resumido:
-  - **Instalar:** Capacitor 7 y todos sus plugins toman la versión mínima de `variables.gradle` (hoy 23 = Android 6). El APK actual **ya se instala en Android 6**. Para Android 5 hay que bajar `minSdkVersion` a 21; el código nativo de Capacitor 7 y de los plugins tiene sus `SDK_INT` cubiertos, salvo un caso (ver abajo).
-  - **Arquitectura:** el APK no tiene bibliotecas nativas (`lib/`): es **universal**. Anda en armeabi-v7a y también en x86 (la Bangho lo corre sin traductor). No hace falta separar por arquitectura como en Flutter.
-  - **Recordatorios en Android 5:** `reminders.js` programa con `allowWhileIdle: true` y el plugin usa `setExactAndAllowWhileIdle` (Android 6+) sin control: en Android 5 se cerraría al crear un recordatorio. Arreglo: `allowWhileIdle` solo en Android 6 o más.
-  - **WebView (lo principal):** la app corre dentro de "Android System WebView". La de fábrica de Android 5/6 (Chromium 37–44) no sirve. Con la WebView actualizada desde Play Store, el máximo es **Chromium 95** en Android 5 y **106** en Android 6. La web se compila con `es2022` (pide Chromium 94 o más): alcanza en los dos casos si la WebView está actualizada.
-  - **CSS:** `color-mix` (10 usos, pide Chromium 111) y `:has` (3 usos, pide 105) no andan en esas WebView: algunos fondos quedan transparentes y el snackbar del editor puede quedar tapado. Arreglo: color de respaldo antes de cada `color-mix` y una clase en lugar de `:has` (no cambia nada en la web ni en el celular).
-  - **Importar PDF:** `pdfjs-dist` 4 usa `Promise.withResolvers`, `Promise.try`, `structuredClone` y `AbortSignal.any` (Chromium 98–128): en las tablets fallaría. Arreglo: usar la compilación `legacy` de pdfjs (se carga solo al importar un PDF). El resto del paquete (Tiptap, Yjs, Firebase, docx, jspdf, mammoth) está bien o ya tiene control.
-  - **Inicio de sesión con Google:** Google Play services dejó de actualizarse en Android 5 en julio de 2024 (sigue en Android 6). El plugin prueba Credential Manager y, si falla, el método clásico (`play-services-auth` 20.7.0), que debería andar con Play services viejos. Solo se sabe probando.
-  - **Firebase nativo:** `@capacitor-firebase/authentication` 7.5 usa `firebase-auth` 23.1.0 (anterior al cambio de Firebase a mínimo Android 6 de julio de 2025). Si la compilación con mínimo 21 lo rechaza, se fija una versión anterior en `variables.gradle`.
-- En curso: nada a medio hacer (no se tocó código).
+  - **Instalar:** Capacitor 7 y todos sus plugins toman la versión mínima de `variables.gradle` (hoy 23 = Android 6). El APK actual **ya se instala en Android 6**. Para Android 5 hay que bajar `minSdkVersion` a 21; el código nativo de Capacitor 7 y de los plugins tiene sus `SDK_INT` cubiertos, salvo los recordatorios (ya resuelto en la Parte 1).
+  - **Arquitectura:** el APK no tiene bibliotecas nativas (`lib/`): es **universal** (anda en armeabi-v7a y en x86, la Bangho lo corre sin traductor).
+  - **WebView (lo principal):** la de fábrica de Android 5/6 (Chromium 37–44) no sirve. Actualizada desde Play Store llega a **Chromium 95** en Android 5 y **106** en Android 6. La web se compila con `es2022` (pide Chromium 94 o más).
+  - **Inicio de sesión con Google:** Google Play services dejó de actualizarse en Android 5 en julio de 2024 (sigue en Android 6). El plugin prueba Credential Manager y, si falla, el método clásico (`play-services-auth` 20.7.0). Solo se sabe probando.
+  - **Firebase nativo:** `@capacitor-firebase/authentication` 7.5 usa `firebase-auth` 23.1.0 (anterior al mínimo Android 6 de Firebase, julio de 2025). Si la compilación con mínimo 21 lo rechaza, se fija una versión anterior en `variables.gradle`.
+- Hecho en la Parte 1 (v0.2.1):
+  - **Colores:** bloque `@supports not (color: color-mix(...))` al final de `styles.css` con colores fijos de respaldo (barra del editor, barra de formato, chips, selección, banner, encabezado y celdas seleccionadas de tablas).
+  - **`:has`:** bloque `@supports not selector(:has(a))` con clases: `body.editor-open` (la pone `setView`) para el snackbar del editor y `.card.with-drag` (la pone `cardEl`) para el margen de la tarjeta con orden manual.
+  - **Importar PDF:** `pdfToHtml` usa la compilación `pdfjs-dist/legacy/build/` si faltan `Promise.withResolvers`, `structuredClone` o `AbortSignal.any`; si no, la moderna de siempre.
+  - **Recordatorios:** `allowWhileIdle` solo en Android 6 o más (`IDLE_OK` en `reminders.js`, por el `userAgent`). En Android 5 el plugin usaba `setExactAndAllowWhileIdle` (Android 6+) y la app se cerraba.
+  - **Aviso de WebView vieja:** script en ES5 en `index.html`, antes del módulo: si no hay `class static {}`, `.at()` u `Object.hasOwn`, oculta la app y muestra en español la versión de la WebView y un botón a Play Store ("Android System WebView").
+  - **Versión (menú lateral):** muestra "Equipo: Android X · WebView Y" (o "Chrome Y" en la web de un celular).
+  - Verificado en el APK de la Release: los dos bloques `@supports`, el aviso en `index.html` y los dos juegos de pdfjs (el APK pasó de 6,0 a 6,6 MB por la versión legacy, que solo se carga al importar un PDF en un equipo viejo).
+- En curso: nada a medio hacer.
 
 ## 3. Próximos pasos
-1. **El usuario elige el esquema del APK** (un solo APK para todos con mínimo Android 5, o dos APK como en la guía) y revisa la versión de "Android System WebView" en las dos tablets (Ajustes → Aplicaciones → Android System WebView), actualizándola desde Play Store si se puede.
-2. **Parte 1 (Patch):** web compatible con WebView viejas: respaldos de `color-mix` y `:has`, pdfjs `legacy`, `allowWhileIdle` solo en Android 6+, y aviso en español si la WebView es demasiado vieja (en vez de pantalla en blanco). Mostrar Android y WebView en "Estadísticas e Info"/"Acerca de".
-3. **Parte 2 (Patch):** APK con `minSdkVersion` 21 según el esquema elegido, y la tabla "¿Qué archivo bajar?" en la Release.
-4. **Parte 3:** el usuario prueba en el celular y en las dos tablets (instalar, iniciar sesión, sincronizar, recordatorio, tabla); se corrige lo que aparezca.
-5. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx.
+1. **El usuario prueba la v0.2.1:** en el celular que todo siga igual; en la **tablet Android 6** (este APK ya se instala ahí) con la WebView actualizada: abrir, iniciar sesión, sincronizar, crear un recordatorio, una tabla y "Versión" (que diga Android y WebView). Si la WebView es vieja, tiene que salir el aviso en español.
+2. **Parte 2 (Patch):** un solo APK para todos con `minSdkVersion` 21 (decisión del usuario, sección 4): en `ci.yml`, `sed` de `minSdkVersion = 23` → `21` en `android/variables.gradle`; verificar que compile (si `firebase-auth` 23.1.0 lo rechaza, fijar `firebaseAuthVersion`), que el APK diga `minSdkVersion 21` y que nada más cambie para el celular. Texto de la Release con la tabla "¿Qué archivo bajar?" y la nota de la WebView.
+3. **Parte 3:** prueba en la Bangho (Android 5) y correcciones.
+4. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx.
 
 ## 4. Decisiones tomadas
 - **Un solo código** para la web y Android (Capacitor), con el aspecto lo más parecido posible en las dos, que en Android se sienta nativa. Backend gratis (Firebase Spark) y hosting en GitHub.
@@ -61,10 +65,14 @@
 - **Color de fondo de celda:** se guarda la *clave* de la paleta (`bg`: yellow, orange, …), no el color, para que cambie con el tema claro/oscuro. Colores sólidos en CSS (sin `color-mix`).
 - **Ordenar números:** formato argentino primero: "1.234,56" = 1234,56; "12,5" = 12,5; un solo punto con exactamente 3 cifras después es separador de miles ("1.234" = 1234); "1.5" = 1,5. Se ignoran $, % y espacios.
 - **Tablas y dispositivos viejos:** en las tablas no se usa CSS ni JavaScript más nuevo que el que ya usa el resto de la app, para no sumar requisitos a la etapa del APK para Android 5/6.
+- **Dispositivos viejos (Android 5/6)** (2026-11-25):
+  - **Un solo APK para todos** (no dos como en Flutter), siempre que no perjudique en nada al APK de los celulares actuales. Es posible porque el APK no tiene partes nativas por arquitectura y Capacitor 7 acepta bajar el mínimo desde `variables.gradle`.
+  - Mínimo de WebView: **Chromium 94** (por `es2022`). No se baja el `target` de la web: en Android 5 la última WebView es la 95 y en Android 6 la 106.
+  - Lo que falta en esas WebView se resuelve con **respaldos que solo se activan donde falta la función** (`@supports not`, detección de funciones), para que la web y el celular sigan exactamente igual.
 - **Versiones:** cada pedido define el tipo de Release (la mayoría Patch; la v0.1.0 y la v0.2.0 fueron Minor; las tablas Parte A y B1 fueron Patch por elección del usuario). Si hay otras preguntas pendientes, el tipo de Release se pregunta al final; si no, se avanza con Patch y se avisa el número.
 
 ## 5. Pendientes / dudas abiertas
-- [ ] **APK para dispositivos viejos:** diagnóstico hecho (ver sección 2). Pendiente: elegir el esquema y hacer las Partes 1 a 3.
+- [ ] **APK para dispositivos viejos:** diagnóstico y Parte 1 hechos (v0.2.1, ver sección 2). Esquema elegido: un solo APK. Pendiente: Partes 2 y 3.
 - [ ] **App Links** (que el link de una nota abra la app en vez de la web). Requiere que el usuario cree el repo vacío `luchorcompartidos.github.io` (Claude no puede crear repos). Después hay que subir ahí `.well-known/assetlinks.json` con el paquete `io.github.luchorcompartidos.notas` y el SHA-256 de la firma: `F3:CC:EE:75:71:9A:9E:A6:13:FD:C2:0E:30:33:49:48:C3:1A:0C:67:77:60:B4:97:B5:C5:9C:3F:E3:AD:3B:D9`. Además hay que agregar en `patch-android.py` el intent-filter `autoVerify` para `https://luchorcompartidos.github.io/notas/`.
 - **Limitaciones conocidas:**
   - **Sin notificaciones push:** con la app cerrada no llegan los pedidos de acceso, ni las invitaciones, ni los recordatorios creados en otro dispositivo; se ven y se programan al abrir la app. Hacerlo requiere el plan Blaze (Cloud Functions + FCM).
@@ -113,6 +121,8 @@ Vite 6 (target es2022, `base: './'`) + Capacitor 7. Todo el código de la app es
   - `BiometricPlugin` usa BiometricPrompt.
 - `patch-android.py` corre en cada compilación sobre el proyecto que genera `npx cap add android`. Agrega intent-filters (con los `pathPattern` de `.anote`), el receiver del widget y la dependencia biometric.
 
+**WebView viejas (Android 5/6):** al tocar CSS o JS, no usar nada que pida más de Chromium 94 sin respaldo. Lo que ya tiene respaldo: `color-mix` y `:has` (bloques `@supports not` al final de `styles.css`, con las clases `editor-open` y `with-drag`), pdfjs (`legacy`), `allowWhileIdle` (`IDLE_OK`). El aviso de WebView vieja es el `<script>` ES5 de `index.html`. Para revisar un APK: `grep` en `assets/public/assets/*.js` de `structuredClone`, `Promise.withResolvers`, `findLast`, `toSorted`, `Object.groupBy`, `AbortSignal.any` (en el paquete principal no tiene que aparecer ninguno sin control).
+
 **Web:** `public/manifest.webmanifest` (PWA, con `file_handlers` para `.anote`). El service worker lo genera un plugin de Vite en `vite.config.js` y precachea lo que pesa menos de 400 KB.
 
 ### Modelo de datos (Firestore)
@@ -155,6 +165,7 @@ Vite 6 (target es2022, `base: './'`) + Capacitor 7. Todo el código de la app es
 - **Tablas desde el panel:** los comandos se corren sin `focus()` (`runTableCommand(..., { focus: false })`), para que no se abra el teclado detrás del panel. Los botones de las barras usan `pointerdown` + `preventDefault` para no cerrar el teclado.
 - **`deleteRow`/`deleteColumn`** no borran la última fila o columna: en ese caso se borra la tabla (`runTableCommand`).
 - **`.anote` en `patch-android.py`:** cuidado con el doble escape de `pathPattern`.
+- **`deploy-pages` a veces falla** con "No artifacts named github-pages were found" (problema pasajero de GitHub): se arregla con *Re-run failed jobs* (`gh run rerun <id> --failed`). Pasó en la v0.2.1.
 - **Plantilla `release.yml`:** al inicio, la de prueba-deploy chocaba con `ci.yml`. En este repo solo existe `ci.yml`.
 
 ## 7. Historial (resumido)
@@ -172,3 +183,4 @@ La tabla completa de versiones está en el `README.md`.
 | v0.1.3 (2026-11-25) | Tablas, Parte A: insertar (grilla o − / +), barra y panel de tabla, filas y columnas, alineación, encabezados, duplicar/eliminar, pegar desde Excel/Sheets, exportar e importar tablas. DESARROLLO.md pasa a la estructura de la plantilla |
 | v0.1.4 (2026-11-25) | Tablas, Parte B1: ancho de columnas (automático, iguales, manual con − / +), alto de filas (automático, iguales, manual), copiar e insertar filas y columnas con su contenido, duplicar fila o columna, botón «↔ Tamaño» |
 | v0.2.0 (2026-11-25) | Tablas, Parte B2: color de fondo por celda/fila/columna/tabla (también en PDF y docx), ordenar filas por una columna (texto y números), menú al mantener apretada una celda (clic derecho en la PC), botón de color en la barra de tabla |
+| v0.2.1 (2026-11-25) | Dispositivos viejos, Parte 1: web compatible con WebView de Android 5/6 (respaldos de `color-mix` y `:has`, pdfjs legacy, recordatorios sin cierre en Android 5, aviso de WebView vieja, Android/WebView en "Versión") |
