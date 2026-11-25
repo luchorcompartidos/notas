@@ -148,6 +148,76 @@ const alignAttrs = {
 const Celda = TableCell.extend({ addAttributes() { return { ...this.parent?.(), ...alignAttrs }; } });
 const CeldaEncabezado = TableHeader.extend({ addAttributes() { return { ...this.parent?.(), ...alignAttrs }; } });
 
+// Alto de fila (px). Funciona como alto mínimo: si el contenido ocupa más, la fila crece. null = automático.
+const Fila = TableRow.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      height: {
+        default: null,
+        parseHTML: (el) => { const h = parseInt(el.style.height || el.getAttribute('height'), 10); return h > 0 ? h : null; },
+        renderHTML: (a) => (a.height ? { style: `height:${a.height}px` } : {}),
+      },
+    };
+  },
+});
+
+// Ancho de columnas de la tabla: colMode 'auto' = según el contenido; null = fijo (iguales o con los anchos de colwidth).
+// En el editor la tabla se dibuja con una vista propia (TableView), así que el modo se marca con una decoración
+// en el contenedor (.tableWrapper.tbl-auto). En las vistas sin editor (versiones, exportar) va como data-cols.
+const tablaModoKey = new PluginKey('tablaModo');
+const decoTablas = (doc) => {
+  const decos = [];
+  doc.descendants((node, pos) => {
+    if (node.type.name === 'table') {
+      if (node.attrs.colMode === 'auto') decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'tbl-auto' }));
+      return false;
+    }
+    return !node.isTextblock;
+  });
+  return DecorationSet.create(doc, decos);
+};
+const Tabla = Table.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      colMode: {
+        default: null,
+        parseHTML: (el) => (el.getAttribute('data-cols') === 'auto' ? 'auto' : null),
+        renderHTML: (a) => (a.colMode ? { 'data-cols': a.colMode } : {}),
+      },
+    };
+  },
+  addProseMirrorPlugins() {
+    return [
+      ...(this.parent?.() || []),
+      new Plugin({
+        key: tablaModoKey,
+        state: {
+          init: (_c, state) => decoTablas(state.doc),
+          apply: (tr, old) => (tr.docChanged ? decoTablas(tr.doc) : old),
+        },
+        props: { decorations(state) { return tablaModoKey.getState(state); } },
+        // Si en modo automático se arrastra el borde de una columna (PC), la tabla pasa a anchos manuales.
+        appendTransaction: (trs, _old, state) => {
+          if (!trs.some((t) => t.docChanged)) return null;
+          let tr = null;
+          state.doc.descendants((node, pos) => {
+            if (node.type.name !== 'table') return !node.isTextblock;
+            if (node.attrs.colMode === 'auto') {
+              let has = false;
+              node.descendants((c) => { if (c.attrs.colwidth?.some((w) => w > 0)) has = true; return !has && (c.type.name === 'tableRow'); });
+              if (has) { tr = tr || state.tr; tr.setNodeMarkup(pos, null, { ...node.attrs, colMode: null }); }
+            }
+            return false;
+          });
+          return tr;
+        },
+      }),
+    ];
+  },
+});
+
 // Pegar texto separado por tabulaciones (copiado de Excel, Sheets o un .txt) arma una tabla.
 // Si lo copiado trae HTML con <table>, lo resuelve el editor solo.
 const PegarTablaTSV = Extension.create({
@@ -273,6 +343,210 @@ export function runTableCommand(editor, cmd, { focus = true } = {}) {
   }
 }
 
+/* ---------- Tablas: ancho de columnas, alto de filas, copiar e insertar ---------- */
+export const CELL_MIN = 64;
+const COL_MAX = 1200;
+const ROW_MIN = 24;
+const ROW_MAX = 800;
+
+// Posición (en el documento) de la fila r de la tabla del contexto.
+function rowPos(ctx, r) {
+  let p = ctx.tableStart;
+  for (let i = 0; i < r; i++) p += ctx.table.child(i).nodeSize;
+  return p;
+}
+function domAt(editor, pos) {
+  try { const d = editor.view.nodeDOM(pos); return d && d.nodeType === 1 ? d : null; } catch { return null; }
+}
+// Ancho que se ve hoy de la columna col (medido en pantalla).
+function measureCol(editor, ctx, col, row = ctx.rect.top) {
+  const p = ctx.map.map[row * ctx.map.width + col];
+  const cell = ctx.table.nodeAt(p);
+  const el = domAt(editor, ctx.tableStart + p);
+  const w = el ? el.offsetWidth / (cell?.attrs.colspan || 1) : 0;
+  const attr = cell?.attrs.colwidth?.[cell.attrs.colspan === 1 ? 0 : col - ctx.map.colCount(p)];
+  return Math.round(w || attr || CELL_MIN);
+}
+function measureRow(editor, ctx, r) {
+  const el = domAt(editor, rowPos(ctx, r));
+  return Math.round(el ? el.offsetHeight : (ctx.table.child(r).attrs.height || 0));
+}
+
+// Estado de los tamaños para el panel "Tabla".
+export function tableSizes(editor) {
+  const ctx = tableContext(editor.state);
+  if (!ctx) return null;
+  let anyWidth = false;
+  ctx.table.descendants((c) => { if (c.attrs.colwidth?.some((w) => w > 0)) anyWidth = true; return c.type.name === 'tableRow'; });
+  const colMode = ctx.table.attrs.colMode === 'auto' ? 'auto' : anyWidth ? 'manual' : 'equal';
+  const heights = [];
+  ctx.table.forEach((row) => heights.push(row.attrs.height || null));
+  const rowMode = heights.every((h) => !h) ? 'auto' : heights.every((h) => h && h === heights[0]) ? 'equal' : 'manual';
+  return {
+    colMode, rowMode,
+    colWidth: measureCol(editor, ctx, ctx.rect.left),
+    rowHeight: measureRow(editor, ctx, ctx.rect.top),
+  };
+}
+
+// Pone colwidth = width en todas las celdas de la columna col (o la borra con width = null).
+function setColAttr(tr, ctx, col, width) {
+  const { map, table, tableStart } = ctx;
+  for (let row = 0; row < map.height; row++) {
+    const idx = row * map.width + col;
+    if (row && map.map[idx] === map.map[idx - map.width]) continue;
+    const p = map.map[idx];
+    const attrs = table.nodeAt(p).attrs;
+    const i = attrs.colspan === 1 ? 0 : col - map.colCount(p);
+    const cw = attrs.colwidth ? attrs.colwidth.slice() : new Array(attrs.colspan).fill(0);
+    if ((cw[i] || null) === (width || null)) continue;
+    cw[i] = width || 0;
+    tr.setNodeMarkup(tableStart + p, null, { ...attrs, colwidth: cw.some((w) => w > 0) ? cw : null });
+  }
+}
+
+// Ancho manual de la columna en la que está el cursor (también sirve en el celular, sin arrastrar).
+export function setColumnWidth(editor, width) {
+  const ctx = tableContext(editor.state);
+  if (!ctx) return false;
+  const w = Math.max(CELL_MIN, Math.min(COL_MAX, Math.round(Number(width) || CELL_MIN)));
+  const tr = editor.state.tr;
+  // Al fijar una columna, las demás quedan con el ancho que se ve ahora (si no, se reparten el resto y "saltan").
+  const widths = [];
+  for (let c = 0; c < ctx.map.width; c++) widths.push(c === ctx.rect.left ? w : measureCol(editor, ctx, c));
+  if (ctx.table.attrs.colMode) tr.setNodeMarkup(ctx.tablePos, null, { ...ctx.table.attrs, colMode: null });
+  widths.forEach((cw, c) => setColAttr(tr, ctx, c, cw));
+  if (tr.docChanged) editor.view.dispatch(tr);
+  return true;
+}
+
+// Ancho de todas las columnas: 'auto' (según el contenido), 'equal' (todas iguales) o 'manual' (fija los anchos actuales).
+export function setColumnsMode(editor, mode) {
+  const ctx = tableContext(editor.state);
+  if (!ctx) return false;
+  const tr = editor.state.tr;
+  const widths = [];
+  for (let c = 0; c < ctx.map.width; c++) widths.push(mode === 'manual' ? measureCol(editor, ctx, c) : null);
+  tr.setNodeMarkup(ctx.tablePos, null, { ...ctx.table.attrs, colMode: mode === 'auto' ? 'auto' : null });
+  widths.forEach((w, c) => setColAttr(tr, ctx, c, w));
+  if (tr.docChanged) editor.view.dispatch(tr);
+  return true;
+}
+
+// Alto manual de la fila en la que está el cursor (null = automático).
+export function setRowHeight(editor, height) {
+  const ctx = tableContext(editor.state);
+  if (!ctx) return false;
+  const h = height == null ? null : Math.max(ROW_MIN, Math.min(ROW_MAX, Math.round(Number(height) || ROW_MIN)));
+  const r = ctx.rect.top;
+  const row = ctx.table.child(r);
+  if ((row.attrs.height || null) === h) return true;
+  editor.view.dispatch(editor.state.tr.setNodeMarkup(rowPos(ctx, r), null, { ...row.attrs, height: h }));
+  return true;
+}
+
+// Alto de todas las filas: 'auto', 'equal' (todas como la más alta) o 'manual' (fija los altos actuales).
+export function setRowsMode(editor, mode) {
+  const ctx = tableContext(editor.state);
+  if (!ctx) return false;
+  const measured = [];
+  for (let r = 0; r < ctx.map.height; r++) measured.push(measureRow(editor, ctx, r));
+  const max = Math.max(ROW_MIN, ...measured);
+  const tr = editor.state.tr;
+  for (let r = 0; r < ctx.table.childCount; r++) {
+    const row = ctx.table.child(r);
+    const h = mode === 'auto' ? null : mode === 'equal' ? max : Math.max(ROW_MIN, measured[r] || ROW_MIN);
+    if ((row.attrs.height || null) !== h) tr.setNodeMarkup(tr.mapping.map(rowPos(ctx, r)), null, { ...row.attrs, height: h });
+  }
+  if (tr.docChanged) editor.view.dispatch(tr);
+  return true;
+}
+
+// "Portapapeles" de filas y columnas: se guarda como JSON para poder insertarlo también en otra nota.
+let tableClip = null;
+export function getTableClip() { return tableClip; }
+
+export function copyTablePart(editor, kind) {
+  const ctx = tableContext(editor.state);
+  if (!ctx) return null;
+  const { map, table, rect } = ctx;
+  const seen = new Set();
+  const cells = [];
+  const n = kind === 'row' ? map.width : map.height;
+  for (let i = 0; i < n; i++) {
+    const p = kind === 'row' ? map.map[rect.top * map.width + i] : map.map[i * map.width + rect.left];
+    if (seen.has(p)) { cells.push(null); continue; } // parte de una celda combinada: va vacía
+    seen.add(p);
+    cells.push(table.nodeAt(p).toJSON());
+  }
+  tableClip = {
+    kind, cells,
+    index: (kind === 'row' ? rect.top : rect.left) + 1,
+    rowAttrs: kind === 'row' ? { ...table.child(rect.top).attrs } : null,
+  };
+  return tableClip;
+}
+
+// Arma una celda nueva con el contenido copiado (o vacía) y el tipo/ancho del lugar donde va.
+function makeCell(schema, json, type, colwidth) {
+  let content = null; let align = null; let valign = null;
+  if (json) {
+    try {
+      const src = schema.nodeFromJSON(json);
+      content = src.content; align = src.attrs.align || null; valign = src.attrs.valign || null;
+    } catch { content = null; }
+  }
+  const attrs = { colspan: 1, rowspan: 1, colwidth: colwidth || null, align, valign };
+  return (content && content.size ? type.create(attrs, content) : null) || type.createAndFill(attrs);
+}
+
+// Inserta la fila o columna copiada arriba/abajo (fila) o a la izquierda/derecha (columna) de la celda actual.
+export function insertCopied(editor, where, { focus = true } = {}) {
+  const st = editor.state;
+  const ctx = tableContext(st);
+  if (!ctx || !tableClip) return false;
+  const { map, table, tableStart, rect } = ctx;
+  const s = st.schema;
+  const tr = st.tr;
+  if (tableClip.kind === 'row') {
+    const ref = where === 'before' ? rect.top : rect.bottom - 1;
+    const target = where === 'before' ? rect.top : rect.bottom;
+    const cells = [];
+    for (let c = 0; c < map.width; c++) {
+      const refCell = table.nodeAt(map.map[ref * map.width + c]);
+      const type = c === 0 && ctx.headerCol ? s.nodes.tableHeader : s.nodes.tableCell;
+      const cw = refCell.attrs.colspan === 1 ? refCell.attrs.colwidth : null;
+      cells.push(makeCell(s, tableClip.cells[c], type, cw));
+    }
+    const rowAttrs = { ...(tableClip.rowAttrs || {}) };
+    tr.insert(rowPos(ctx, target), s.nodes.tableRow.create(rowAttrs, cells));
+  } else {
+    const t = where === 'before' ? rect.left : rect.right;
+    // El ancho copiado se usa solo si la tabla de destino ya tiene anchos manuales.
+    let manual = false;
+    table.descendants((c) => { if (c.attrs.colwidth?.some((w) => w > 0)) manual = true; return c.type.name === 'tableRow'; });
+    manual = manual && table.attrs.colMode !== 'auto';
+    for (let r = map.height - 1; r >= 0; r--) {
+      const type = r === 0 && ctx.headerRow ? s.nodes.tableHeader : s.nodes.tableCell;
+      const json = tableClip.cells[r];
+      const cw = manual && json?.attrs?.colwidth?.[0] ? [json.attrs.colwidth[0]] : null;
+      tr.insert(tableStart + map.positionAt(r, t, table), makeCell(s, json, type, cw));
+    }
+  }
+  editor.view.dispatch(tr.scrollIntoView());
+  if (focus) editor.view.focus();
+  return true;
+}
+
+// Duplicar la fila o la columna actual (sin tocar lo que haya copiado).
+export function duplicateTablePart(editor, kind, opts) {
+  const prev = tableClip;
+  copyTablePart(editor, kind);
+  const ok = insertCopied(editor, 'after', opts);
+  tableClip = prev;
+  return ok;
+}
+
 // Extensiones del contenido (las mismas para mostrar versiones y exportar)
 export function contentExtensions({ resolveImage, reminderIds } = {}) {
   return [
@@ -283,8 +557,8 @@ export function contentExtensions({ resolveImage, reminderIds } = {}) {
     ImagenAparte.configure({ inline: false, allowBase64: true, resolve: resolveImage }),
     Link.configure({ autolink: true, linkOnPaste: true, openOnClick: false, HTMLAttributes: { rel: 'noopener noreferrer nofollow', target: '_blank' } }),
     // Tablas: en pantallas chicas cada columna mide al menos 64 px y la tabla se desplaza de costado.
-    Table.configure({ resizable: true, cellMinWidth: 64, lastColumnResizable: true, allowTableNodeSelection: false, HTMLAttributes: { class: 'nota-tabla' } }),
-    TableRow,
+    Tabla.configure({ resizable: true, cellMinWidth: CELL_MIN, lastColumnResizable: true, allowTableNodeSelection: false, HTMLAttributes: { class: 'nota-tabla' } }),
+    Fila,
     CeldaEncabezado,
     Celda,
   ];

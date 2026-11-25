@@ -25,6 +25,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | — | v0.1.1 | Ocultar notas de la pantalla principal (listado «Notas ocultables» con selección múltiple, Quitar del listado y Restaurar listado; marca [Oculta] y filtro «Excluir ocultas» en la búsqueda) y «Estadísticas e Info de la nota» |
 | — | v0.1.2 | «Título automático» (menú lateral): a una nota nueva que se cierra sin título se le pone la primera frase, un prefijo configurable o prefijo + primera frase |
 | — | v0.1.3 | **Tablas (Parte A)**: insertar eligiendo columnas × filas (grilla o − / +), barra de tabla, agregar/insertar/eliminar filas y columnas, alineación horizontal y vertical (celda, fila, columna o tabla), fila y columna de encabezado, duplicar/eliminar tabla, escribir arriba/debajo, pegar desde Excel/Sheets, desplazamiento lateral en el celular; exportar e importar tablas |
+| — | v0.1.4 | **Tablas (Parte B1)**: ancho de columnas automático, iguales o manual (con − / + o un número, también en el celular), alto de filas automático, iguales o manual, copiar una fila o columna e insertarla con su contenido entre otras (también en otra tabla u otra nota), duplicar fila o columna, botón «↔ Tamaño» en la barra de tabla |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
 

@@ -15,31 +15,28 @@
 | URL publicada | https://luchorcompartidos.github.io/notas/ |
 | Tipo | Web + Android (Capacitor, un solo código) |
 | Estado | En uso |
-| Última versión (Release) | v0.1.3 — 2026-11-25 |
+| Última versión (Release) | v0.1.4 — 2026-11-25 |
 | Se conecta con | Firebase, proyecto **notas-pro-2026** (plan gratuito Spark; Firestore en modo producción) |
 | Dispositivos viejos (Android 5/6) | **Sí**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio. La adaptación del APK todavía no está hecha: es una etapa propia pendiente (ver sección 5) |
 
 ## 2. Etapa actual
-**Tablas en las notas: Parte A hecha (v0.1.3). Sigue la Parte B.**
+**Tablas en las notas: Parte B1 hecha (v0.1.4). Sigue la Parte B2.**
 - Objetivo: tablas fáciles de insertar, ajustar, ampliar y modificar dentro de las notas, en la web y en el APK.
-- Hecho en la Parte A (v0.1.3):
-  - Botón **Tabla** en la barra de formato. Si el cursor no está en una tabla, abre "Insertar tabla": grilla de 8 × 8 o cantidades escritas con − y + (hasta 20 columnas y 200 filas), con "Primera fila como encabezado".
-  - **Barra de tabla** (aparece arriba de la barra de formato con el cursor dentro de una tabla): posición `F2 · C3` (abre el panel), + Fila ↑/↓, + Col ←/→, alineación horizontal y vertical (tocar cicla las opciones), − Fila, − Col.
-  - **Panel "Tabla"**: filas, columnas, alineación con "Aplicar a: Celda / Fila / Columna / Tabla" (4 horizontales y 3 verticales), fila y columna de encabezado, escribir arriba o debajo de la tabla, duplicar y eliminar tabla (con Deshacer).
-  - Tab pasa de celda y en la última agrega una fila. Pegar desde Excel/Sheets (HTML) o texto con tabulaciones arma la tabla. Casillas, listas y formato dentro de las celdas. Desplazamiento lateral en pantallas chicas (columna mínima de 64 px). Ancho de columna arrastrando el borde con el mouse (en la PC).
-  - Exportar: txt, WhatsApp (filas con `|`), md (tabla GFM con alineación), docx (tabla real con alineación y encabezado sombreado) y PDF (grilla). Importar: md con tablas; docx y html ya traen sus tablas.
-  - Una nota nueva que solo tiene una tabla vacía no se descarta al cerrarla.
+- Parte A (v0.1.3): insertar, barra y panel de tabla, filas y columnas, alineación, encabezados, duplicar/eliminar, pegar desde Excel/Sheets, exportar e importar (detalle en Historial).
+- Hecho en la Parte B1 (v0.1.4), todo en el panel "Tabla" (grupo **Tamaño**, al que lleva directo el botón **↔ Tamaño** de la barra de tabla):
+  - **Ancho de columnas:** Automático (según el contenido), Iguales o Manual. "Manual" fija los anchos que se ven en ese momento. La columna actual se ajusta con − / + (de a 16 px) o escribiendo el número (64 a 1200 px). Sirve en el celular sin mouse. En la PC se puede seguir arrastrando el borde: si la tabla estaba en Automático, pasa sola a Manual.
+  - **Alto de filas:** Automático, Iguales (todas como la más alta) o Manual (fija los altos actuales). La fila actual se ajusta con − / + (de a 8 px) o con un número (24 a 800 px). El alto es un mínimo: la fila nunca queda más baja que su contenido.
+  - **Copiar fila / Copiar columna** y **Insertar copiada** arriba/abajo o a la izquierda/derecha, con contenido, alineación y alto de fila. Lo copiado queda guardado mientras la app esté abierta y se puede insertar en otra tabla u otra nota. Si la cantidad no coincide, se completan celdas vacías o se recorta.
+  - **Duplicar fila** (debajo) y **Duplicar columna** (a la derecha), sin pisar lo copiado.
+  - El panel conserva el desplazamiento al tocar opciones (antes volvía arriba).
 - En curso: nada a medio hacer.
 
 ## 3. Próximos pasos
-1. **El usuario prueba la v0.1.3** en la web, el celular y (si instala) las tablets.
-2. **Parte B de tablas** (ya acordada):
-   - Ancho de columnas: automático según el contenido, todas iguales o manual por columna (también táctil, sin mouse).
-   - Alto de filas: automático, todas iguales o manual.
-   - Copiar una fila o columna y "Insertar copiada" entre medio de otras, con su contenido.
+1. **El usuario prueba la v0.1.4** en la web y en el celular (y, si instala, en las tablets).
+2. **Parte B2 de tablas** (ya acordada):
    - Color de fondo por celda.
    - Ordenar la tabla por una columna (A→Z, Z→A, números).
-   - Menú al mantener apretada una celda en el celular.
+   - Menú al mantener apretada una celda en el celular (puede reunir copiar/insertar copiada/tamaño).
    - Combinar celdas: queda para más adelante (complica la fusión de cambios entre dispositivos).
 3. Etapa propia: **APK para dispositivos viejos** (ver sección 5).
 
@@ -60,7 +57,8 @@
   - Primera frase: hasta el primer punto seguido de espacio o fin, o el primer salto de línea, lo que aparezca antes; sin tope de largo (`firstPhrase`).
   - Se guarda en `settings/prefs`: `autoTitleOn`, `autoTitleMode` (`phrase`/`prefix`/`both`), `autoTitlePrefix`. Sin cambio de reglas.
 - **Links de nota:** por ahora abren la web (`#/nota/<id>?o=<dueño>`). Si quien abre el link no tiene acceso, puede "Solicitar acceso" y el dueño lo aprueba o lo rechaza.
-- **Tablas** (2026-11-25): se hacen en dos partes (A en v0.1.3, B después). Los extras propuestos por Claude se reparten entre A y B a criterio de Claude. Combinar celdas queda fuera por ahora.
+- **Tablas** (2026-11-25): se hacen por partes: A en v0.1.3, B1 en v0.1.4 (ancho, alto, copiar/insertar copiada) y B2 después (color de fondo, ordenar, menú al mantener apretado). Los extras propuestos por Claude se reparten a criterio de Claude. Combinar celdas queda fuera por ahora.
+- **Tablas y dispositivos viejos:** en las tablas no se usa CSS ni JavaScript más nuevo que el que ya usa el resto de la app, para no sumar requisitos a la etapa del APK para Android 5/6.
 - **Versiones:** cada pedido define el tipo de Release (la mayoría Patch; la v0.1.0 fue Minor; las tablas Parte A fueron Patch por elección del usuario). Si hay otras preguntas pendientes, el tipo de Release se pregunta al final; si no, se avanza con Patch y se avisa el número.
 
 ## 5. Pendientes / dudas abiertas
@@ -69,7 +67,7 @@
   - Capacitor 7 pide como mínimo Android 6.0 (API 23): la tablet Android 5.0 quedaría afuera, salvo con un APK aparte en una versión vieja de Capacitor (a evaluar el costo).
   - La web se compila con `target: es2022` y usa CSS moderno (`color-mix`, `:has`). Con el WebView de fábrica de Android 5/6 no anda: hay que actualizar "Android System WebView" desde Play Store o compilar un APK aparte con un target más viejo.
   - El inicio de sesión con Google nativo y las versiones mínimas de Firebase en Android 5/6.
-  - Las tablas no agregan requisitos nuevos: usan lo mismo que el resto del editor.
+  - Las tablas no agregan requisitos nuevos: usan lo mismo que el resto del editor (revisado también en la Parte B1).
 - [ ] **App Links** (que el link de una nota abra la app en vez de la web). Requiere que el usuario cree el repo vacío `luchorcompartidos.github.io` (Claude no puede crear repos). Después hay que subir ahí `.well-known/assetlinks.json` con el paquete `io.github.luchorcompartidos.notas` y el SHA-256 de la firma: `F3:CC:EE:75:71:9A:9E:A6:13:FD:C2:0E:30:33:49:48:C3:1A:0C:67:77:60:B4:97:B5:C5:9C:3F:E3:AD:3B:D9`. Además hay que agregar en `patch-android.py` el intent-filter `autoVerify` para `https://luchorcompartidos.github.io/notas/`.
 - **Limitaciones conocidas:**
   - **Sin notificaciones push:** con la app cerrada no llegan los pedidos de acceso, ni las invitaciones, ni los recordatorios creados en otro dispositivo; se ven y se programan al abrir la app. Hacerlo requiere el plan Blaze (Cloud Functions + FCM).
@@ -77,7 +75,7 @@
   - **Imágenes en copias:** una nota copiada referencia las imágenes de la original.
   - **`.anote` en Android:** algunos exploradores muestran "Abrir con…" la primera vez, y ANote... aparece también para algunos archivos genéricos.
   - **Vista previa de links en la web:** depende de microlink.io (se puede desactivar desde ⋮).
-  - **Tablas:** en el celular, el ancho de columna todavía no se ajusta con el dedo (llega en la Parte B). En el PDF las columnas salen del mismo ancho.
+  - **Tablas:** en el celular el ancho se cambia desde el panel (− / +), no arrastrando el borde con el dedo. Los anchos y altos no se exportan: en el PDF las columnas salen del mismo ancho y en el docx las reparte Word. Lo copiado (fila o columna) se pierde al cerrar la app.
   - **Sin probar en el dispositivo por Claude:** desde la v0.1.0 (vista compacta, link y pedidos de acceso, ocultas, estadísticas, título automático y tablas) las confirma el usuario.
   - **`package.json`** dice `"version": "0.0.12"`, pero la versión real sale de los tags: no se usa.
 
@@ -101,7 +99,10 @@ Vite 6 (target es2022, `base: './'`) + Capacitor 7. Todo el código de la app es
 | `version.js` | Versión, fecha y Changelog desde las Releases, y aviso de versión nueva |
 | `store.js`, `icons.js`, `styles.css` | Almacenamiento kv (IndexedDB), íconos Material en SVG en línea, y estilos Material 3 (claro y oscuro) |
 
-**Tablas:** el contenido de la tabla vive en el documento Yjs como el resto (se fusiona entre dispositivos). La alineación se guarda en cada celda (`align`: center/right/justify; `valign`: middle/bottom; izquierda y arriba = `null`). El ancho arrastrado queda en `colwidth` (de prosemirror-tables). `#table-bar` está en `index.html`, arriba de `#toolbar`; la clase `in-table` en `#view-editor` agranda el margen inferior del editor.
+**Tablas:** el contenido de la tabla vive en el documento Yjs como el resto (se fusiona entre dispositivos). La alineación se guarda en cada celda (`align`: center/right/justify; `valign`: middle/bottom; izquierda y arriba = `null`).
+- **Ancho:** cada celda guarda `colwidth` (de prosemirror-tables). La tabla (`Tabla`, extensión de Table) tiene `colMode`: `'auto'` = `table-layout: auto`; `null` = fijo (Iguales si ninguna celda tiene `colwidth`, Manual si alguna tiene). En el editor la tabla se dibuja con `TableView`, que no copia atributos: por eso el modo se marca con una decoración (`tbl-auto` en `.tableWrapper`, plugin `tablaModo`). En las vistas sin editor sale como `data-cols="auto"`. El mismo plugin pasa la tabla a Manual si en Automático aparece un `colwidth` (arrastre con el mouse).
+- **Alto:** `height` en cada fila (`Fila`, extensión de TableRow), con `style="height:Npx"`, funciona como mínimo.
+- **Funciones** (`editor.js`): `tableSizes` (modos y medidas actuales con `nodeDOM`), `setColumnWidth`, `setColumnsMode`, `setRowHeight`, `setRowsMode`, `copyTablePart`, `insertCopied`, `duplicateTablePart` y `getTableClip`. Lo copiado se guarda como JSON (cada editor tiene su propio esquema) y se rearma con `schema.nodeFromJSON`. Las columnas se insertan con `TableMap.positionAt`, de la última fila a la primera. `#table-bar` está en `index.html`, arriba de `#toolbar`; la clase `in-table` en `#view-editor` agranda el margen inferior del editor.
 
 **Android (`android-extra/`):**
 - `res/`: ícono, splash, widget "Nota rápida", accesos directos y strings.
@@ -150,6 +151,7 @@ Vite 6 (target es2022, `base: './'`) + Capacitor 7. Todo el código de la app es
 - **Menús emergentes:** usar `placePopup`, que los ajusta al borde de la pantalla.
 - **CSS:** existe un `[hidden]{display:none!important}` global, porque algunas reglas `display` pisaban `hidden`.
 - **Panel inferior (sheet):** `#sheet-body` se reutiliza entre aperturas. Los eventos van en un contenedor interno que se reemplaza, no en `#sheet-body`, para que no se acumulen. Además, `openMenu` llama a `closeOverlays()`, que cierra también el panel: dentro de un panel, usar botones propios en vez de un menú. `#sheet` tiene alto máximo y desplazamiento propio (desde v0.1.3).
+- **Tablas, medir antes de cambiar:** "Manual", "Iguales" (filas) y el ancho de una columna miden la tabla en pantalla. El panel se redibuja en el cuadro siguiente (`requestAnimationFrame`) para medir la tabla ya actualizada.
 - **Tablas desde el panel:** los comandos se corren sin `focus()` (`runTableCommand(..., { focus: false })`), para que no se abra el teclado detrás del panel. Los botones de las barras usan `pointerdown` + `preventDefault` para no cerrar el teclado.
 - **`deleteRow`/`deleteColumn`** no borran la última fila o columna: en ese caso se borra la tabla (`runTableCommand`).
 - **`.anote` en `patch-android.py`:** cuidado con el doble escape de `pathPattern`.
@@ -168,3 +170,4 @@ La tabla completa de versiones está en el `README.md`.
 | v0.1.1 | Ocultar notas (listado "Notas ocultables") y "Estadísticas e Info de la nota" |
 | v0.1.2 | Título automático para notas nuevas sin título |
 | v0.1.3 (2026-11-25) | Tablas, Parte A: insertar (grilla o − / +), barra y panel de tabla, filas y columnas, alineación, encabezados, duplicar/eliminar, pegar desde Excel/Sheets, exportar e importar tablas. DESARROLLO.md pasa a la estructura de la plantilla |
+| v0.1.4 (2026-11-25) | Tablas, Parte B1: ancho de columnas (automático, iguales, manual con − / +), alto de filas (automático, iguales, manual), copiar e insertar filas y columnas con su contenido, duplicar fila o columna, botón «↔ Tamaño» |

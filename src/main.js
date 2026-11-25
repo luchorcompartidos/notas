@@ -5,6 +5,8 @@ import {
   createEditor, runCommand, isActive, summarize, compressImage, makeThumb,
   refreshReminderMarks, currentTaskItem, taskItems, checkTaskItem, compressDataUrl, noteLinks, contentExtensions,
   tableContext, setCellsAttrs, insertTable, runTableCommand, ALIGN_H, ALIGN_V,
+  tableSizes, setColumnWidth, setColumnsMode, setRowHeight, setRowsMode,
+  copyTablePart, insertCopied, duplicateTablePart, getTableClip,
 } from './editor.js';
 import * as Y from 'yjs';
 import { generateHTML, generateJSON } from '@tiptap/core';
@@ -843,6 +845,7 @@ function bindTableBar() {
       const ctx = tableContext(editor.state);
       if (!ctx) return;
       if (cmd === 'menu') { openTableSheet(); return; }
+      if (cmd === 'size') { openTableSheet({ scrollTo: 'size' }); return; }
       if (cmd === 'alignH') {
         const next = ALIGN_H[(ALIGN_H.indexOf(ctx.align) + 1) % ALIGN_H.length];
         setCellsAttrs(editor, 'cell', { align: next });
@@ -920,18 +923,41 @@ function openInsertTableSheet() {
 }
 
 // Panel "Tabla": todas las opciones de la tabla en la que está el cursor.
-function openTableSheet() {
+const SIZE_LABEL = { auto: 'Automático', equal: 'Iguales', manual: 'Manual' };
+const SIZE_TIP = {
+  col: { auto: 'Cada columna toma el ancho que pide su contenido.', equal: 'Todas las columnas miden lo mismo.', manual: 'Cada columna tiene su ancho: cambialo con − y + (o arrastrando el borde con el mouse).' },
+  row: { auto: 'Cada fila toma el alto de su contenido.', equal: 'Todas las filas miden lo mismo que la más alta.', manual: 'Cada fila tiene su alto: cambialo con − y +. Una fila nunca queda más baja que su contenido.' },
+};
+const COL_STEP = 16; const ROW_STEP = 8;
+
+function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
   if (!editor) return;
   const ctx = tableContext(editor.state);
   if (!ctx) { closeOverlays(); return; }
+  const prevScroll = $('#sheet').scrollTop;
+  const sz = tableSizes(editor);
+  const clip = getTableClip();
   const scopes = Object.entries(SCOPE_LABEL).map(([k, l]) => `<button class="seg-btn ripple${tableUi.scope === k ? ' on' : ''}" data-scope="${k}">${l}</button>`).join('');
   const hBtns = ALIGN_H.map((a) => `<button class="tool ripple${ctx.align === a ? ' active' : ''}" data-align="${a}" aria-label="${H_LABEL[a]}" title="${H_LABEL[a]}">${icon(`align${a}`)}</button>`).join('');
   const vBtns = ALIGN_V.map((a) => `<button class="tool ripple${ctx.valign === a ? ' active' : ''}" data-valign="${a}" aria-label="${V_LABEL[a]}" title="${V_LABEL[a]}">${icon(`valign${a}`)}</button>`).join('');
   const act = (cmd, label, extra = '') => `<button class="chip ripple tbl-act${extra}" data-act="${cmd}"><span>${label}</span></button>`;
+  const seg = (kind, cur) => Object.entries(SIZE_LABEL).map(([k, l]) => `<button class="seg-btn ripple${cur === k ? ' on' : ''}" data-size="${kind}" data-mode="${k}">${l}</button>`).join('');
+  const stepper = (kind, value, label) => `<div class="tbl-stepper tbl-size-step"><span>${label}</span><button class="step-btn ripple" data-sstep="${kind}" data-d="-1" aria-label="Menos">−</button><input data-sval="${kind}" type="number" inputmode="numeric" value="${value}"><button class="step-btn ripple" data-sstep="${kind}" data-d="1" aria-label="Más">+</button><em>px</em></div>`;
+  const clipRow = clip?.kind === 'row'; const clipCol = clip?.kind === 'col';
+  const clipNote = clip ? `<p class="sheet-text tbl-clip">${icon('copy')} Copiada: ${clipRow ? `fila ${clip.index}` : `columna ${clip.index}`} (${clip.cells.length} celdas). Se puede insertar en esta tabla o en otra, también de otra nota.</p>` : '';
   openSheet(`
     <h2 class="sheet-title">${icon('table')} Tabla <small class="ver">${ctx.cols} ${ctx.cols === 1 ? 'columna' : 'columnas'} × ${ctx.rows} ${ctx.rows === 1 ? 'fila' : 'filas'} · estás en la fila ${ctx.row}, columna ${ctx.col}</small></h2>
-    <div class="tbl-group"><h3>Filas</h3><div class="chips-row">${act('rowBefore', '+ Insertar arriba')}${act('rowAfter', '+ Insertar abajo')}${act('deleteRow', '− Eliminar fila', ' danger')}</div></div>
-    <div class="tbl-group"><h3>Columnas</h3><div class="chips-row">${act('colBefore', '+ Insertar a la izquierda')}${act('colAfter', '+ Insertar a la derecha')}${act('deleteCol', '− Eliminar columna', ' danger')}</div></div>
+    <div class="tbl-group"><h3>Filas</h3><div class="chips-row">${act('rowBefore', '+ Insertar arriba')}${act('rowAfter', '+ Insertar abajo')}${act('copyRow', `Copiar fila ${ctx.row}`)}${act('dupRow', 'Duplicar fila')}${clipRow ? act('pasteRowBefore', '⤒ Insertar copiada arriba', ' chip-on') + act('pasteRowAfter', '⤓ Insertar copiada abajo', ' chip-on') : ''}${act('deleteRow', '− Eliminar fila', ' danger')}</div></div>
+    <div class="tbl-group"><h3>Columnas</h3><div class="chips-row">${act('colBefore', '+ Insertar a la izquierda')}${act('colAfter', '+ Insertar a la derecha')}${act('copyCol', `Copiar columna ${ctx.col}`)}${act('dupCol', 'Duplicar columna')}${clipCol ? act('pasteColBefore', '⇤ Insertar copiada a la izquierda', ' chip-on') + act('pasteColAfter', '⇥ Insertar copiada a la derecha', ' chip-on') : ''}${act('deleteCol', '− Eliminar columna', ' danger')}</div></div>
+    ${clipNote}
+    <div class="tbl-group" id="tbl-size-group"><h3>Tamaño</h3>
+      <div class="tbl-size-row"><span>Ancho de columnas</span><div class="seg" role="group" aria-label="Ancho de columnas">${seg('col', sz.colMode)}</div></div>
+      <p class="sheet-text tbl-size-tip">${SIZE_TIP.col[sz.colMode]}</p>
+      ${stepper('col', sz.colWidth, `Columna ${ctx.col}`)}
+      <div class="tbl-size-row"><span>Alto de filas</span><div class="seg" role="group" aria-label="Alto de filas">${seg('row', sz.rowMode)}</div></div>
+      <p class="sheet-text tbl-size-tip">${SIZE_TIP.row[sz.rowMode]}</p>
+      ${stepper('row', sz.rowHeight, `Fila ${ctx.row}`)}
+    </div>
     <div class="tbl-group"><h3>Alineación</h3>
       <div class="seg" role="group" aria-label="Aplicar a">${scopes}</div>
       <div class="tbl-align-row"><span>Horizontal</span>${hBtns}</div>
@@ -939,9 +965,14 @@ function openTableSheet() {
     </div>
     <div class="tbl-group"><h3>Encabezado</h3><div class="chips-row">${act('headerRow', `${ctx.headerRow ? '✓ ' : ''}Fila de encabezado`, ctx.headerRow ? ' chip-on' : '')}${act('headerCol', `${ctx.headerCol ? '✓ ' : ''}Columna de encabezado`, ctx.headerCol ? ' chip-on' : '')}</div></div>
     <div class="tbl-group"><h3>Tabla</h3><div class="chips-row">${act('textBefore', 'Escribir arriba de la tabla')}${act('textAfter', 'Escribir debajo de la tabla')}${act('duplicate', 'Duplicar tabla')}${act('deleteTable', 'Eliminar tabla', ' danger')}</div></div>
-    <p class="sheet-text tbl-tip">Con teclado: Tab pasa a la celda siguiente y, en la última, agrega una fila. Podés pegar celdas copiadas de Excel o Google Sheets y se arma la tabla. Dentro de una celda podés usar casillas, listas y formato.</p>
+    <p class="sheet-text tbl-tip">Con teclado: Tab pasa a la celda siguiente y, en la última, agrega una fila. Podés pegar celdas copiadas de Excel o Google Sheets y se arma la tabla. Dentro de una celda podés usar casillas, listas y formato. En la PC, el ancho de una columna también se cambia arrastrando su borde.</p>
   `, (body) => {
-    const reopen = () => { if (editor && tableContext(editor.state)) openTableSheet(); else closeOverlays(); };
+    // Al volver a dibujar el panel se mantiene el desplazamiento (si no, salta arriba en cada toque).
+    const reopen = () => {
+      if (!editor || !tableContext(editor.state)) { closeOverlays(); return; }
+      // Se espera un cuadro para medir la tabla ya redibujada.
+      requestAnimationFrame(() => openTableSheet({ keepScroll: true }));
+    };
     body.querySelectorAll('[data-scope]').forEach((b) => b.addEventListener('click', () => { tableUi.scope = b.dataset.scope; reopen(); }));
     body.querySelectorAll('[data-align]').forEach((b) => b.addEventListener('click', () => {
       setCellsAttrs(editor, tableUi.scope, { align: b.dataset.align }); reopen();
@@ -951,6 +982,20 @@ function openTableSheet() {
       setCellsAttrs(editor, tableUi.scope, { valign: b.dataset.valign }); reopen();
       snackbar(`${SCOPE_LABEL[tableUi.scope]}: alineación ${V_LABEL[b.dataset.valign].toLowerCase()}`);
     }));
+    // Tamaño: modo de ancho y de alto, y − / + (o número) para la columna y la fila actuales.
+    body.querySelectorAll('[data-size]').forEach((b) => b.addEventListener('click', () => {
+      const { size, mode } = b.dataset;
+      if (size === 'col') setColumnsMode(editor, mode); else setRowsMode(editor, mode);
+      snackbar(`${size === 'col' ? 'Ancho de columnas' : 'Alto de filas'}: ${SIZE_LABEL[mode].toLowerCase()}`);
+      reopen();
+    }));
+    const applySize = (kind, v) => { if (kind === 'col') setColumnWidth(editor, v); else setRowHeight(editor, v); reopen(); };
+    body.querySelectorAll('[data-sstep]').forEach((b) => b.addEventListener('click', () => {
+      const kind = b.dataset.sstep;
+      const cur = Number(body.querySelector(`[data-sval="${kind}"]`).value) || 0;
+      applySize(kind, cur + Number(b.dataset.d) * (kind === 'col' ? COL_STEP : ROW_STEP));
+    }));
+    body.querySelectorAll('[data-sval]').forEach((inp) => inp.addEventListener('change', () => { if (inp.value !== '') applySize(inp.dataset.sval, inp.value); }));
     body.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', async () => {
       const cmd = b.dataset.act;
       if (cmd === 'deleteTable') {
@@ -960,11 +1005,32 @@ function openTableSheet() {
         return;
       }
       if (cmd === 'textBefore' || cmd === 'textAfter') { closeOverlays(); runTableCommand(editor, cmd); return; }
+      if (cmd === 'copyRow' || cmd === 'copyCol') {
+        const c = copyTablePart(editor, cmd === 'copyRow' ? 'row' : 'col');
+        if (c) snackbar(`${c.kind === 'row' ? 'Fila' : 'Columna'} ${c.index} copiada. Ubicate donde quieras y tocá "Insertar copiada".`);
+        reopen();
+        return;
+      }
+      if (cmd === 'dupRow' || cmd === 'dupCol') {
+        duplicateTablePart(editor, cmd === 'dupRow' ? 'row' : 'col', { focus: false });
+        snackbar(cmd === 'dupRow' ? 'Fila duplicada debajo' : 'Columna duplicada a la derecha');
+        reopen();
+        return;
+      }
+      if (cmd.startsWith('paste')) {
+        insertCopied(editor, cmd.endsWith('Before') ? 'before' : 'after', { focus: false });
+        snackbar(cmd.startsWith('pasteRow') ? 'Fila copiada insertada' : 'Columna copiada insertada');
+        reopen();
+        return;
+      }
       runTableCommand(editor, cmd, { focus: false });
       if (cmd === 'duplicate') snackbar('Tabla duplicada debajo');
       reopen();
     }));
   });
+  if (keepScroll) $('#sheet').scrollTop = prevScroll;
+  else if (scrollTo === 'size') $('#tbl-size-group')?.scrollIntoView({ block: 'start' });
+  else $('#sheet').scrollTop = 0;
 }
 
 /* ---------- Acciones del editor ---------- */
