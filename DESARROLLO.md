@@ -15,7 +15,7 @@
 | URL publicada | https://luchorcompartidos.github.io/notas/ |
 | Tipo | Web + Android (Capacitor, un solo código) |
 | Estado | En uso |
-| Última versión (Release) | v0.2.2 — 2026-11-25 |
+| Última versión (Release) | v0.2.3 — 2026-11-25 |
 | Se conecta con | Firebase, proyecto **notas-pro-2026** (plan gratuito Spark; Firestore en modo producción) |
 | Dispositivos viejos (Android 5/6) | **Sí**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio. Partes 1 (v0.2.1, web compatible con WebView viejas) y 2 (v0.2.2, APK con mínimo Android 5.0) hechas; falta la Parte 3 (prueba en la Bangho) |
 
@@ -39,8 +39,9 @@
 - En curso: nada a medio hacer.
 
 ## 3. Próximos pasos
-1. **El usuario prueba la v0.2.2** (se instala encima de la anterior, misma firma):
+1. **El usuario prueba la v0.2.3** (incluye la v0.2.2; se instala encima de la anterior, misma firma):
    - En el **celular**: que todo siga igual, sobre todo iniciar sesión con Google y exportar/enviar un PDF o un docx (usa `@capacitor/filesystem` 7.0.1).
+   - **Escribir debajo de una tabla** (v0.2.3): en una nota que termina en tabla, tocar debajo de la tabla (se abre el teclado en un renglón nuevo); editar algo y ver que queda un renglón vacío debajo; mantener apretada una celda → "Escribir arriba/debajo de la tabla".
    - En la **tablet Android 6** y en la **Bangho (Android 5.0)**, con "Android System WebView" actualizada: instalar, abrir, iniciar sesión, sincronizar, crear un recordatorio y una tabla, exportar un PDF, y ver "Versión" (que diga Android y WebView). Si la WebView es vieja, tiene que salir el aviso en español.
 2. **Parte 3:** correcciones según lo que salga en la prueba. Puntos de riesgo: inicio de sesión con Google en Android 5 (Play services sin actualizar desde 2024) y el puente de Cordova en Android 5.0 (`overrideLibrary`). Si la app se cierra al abrir en la Bangho, revisar primero Cordova.
 3. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx.
@@ -65,6 +66,7 @@
 - **Tablas** (2026-11-25): se hicieron por partes: A en v0.1.3, B1 en v0.1.4 (ancho, alto, copiar/insertar copiada) y B2 en v0.2.0 (color de fondo, ordenar, menú al mantener apretado; Release **Minor** por elección del usuario). Combinar celdas queda fuera por ahora.
 - **Color de fondo de celda:** se guarda la *clave* de la paleta (`bg`: yellow, orange, …), no el color, para que cambie con el tema claro/oscuro. Colores sólidos en CSS (sin `color-mix`).
 - **Ordenar números:** formato argentino primero: "1.234,56" = 1234,56; "12,5" = 12,5; un solo punto con exactamente 3 cifras después es separador de miles ("1.234" = 1234); "1.5" = 1,5. Se ignoran $, % y espacios.
+- **Renglón final** (v0.2.3): si la nota termina en una tabla o una imagen, siempre queda un renglón vacío debajo, para poder poner el cursor después (en el celular no había forma salvo desde el panel). Se agrega solo ante cambios hechos en el dispositivo (no ante los que llegan de otro), y además tocar debajo del final de la nota lo crea y pone el cursor. "Escribir arriba/debajo de la tabla" también está en el menú de la celda (primeras dos opciones) y reutiliza un renglón vacío que ya esté al lado, en vez de agregar otro.
 - **Tablas y dispositivos viejos:** en las tablas no se usa CSS ni JavaScript más nuevo que el que ya usa el resto de la app, para no sumar requisitos a la etapa del APK para Android 5/6.
 - **Dispositivos viejos (Android 5/6)** (2026-11-25):
   - **Un solo APK para todos** (no dos como en Flutter), siempre que no perjudique en nada al APK de los celulares actuales. Es posible porque el APK no tiene partes nativas por arquitectura y Capacitor 7 acepta bajar el mínimo desde `variables.gradle`.
@@ -82,6 +84,7 @@
   - **Imágenes en copias:** una nota copiada referencia las imágenes de la original.
   - **`.anote` en Android:** algunos exploradores muestran "Abrir con…" la primera vez, y ANote... aparece también para algunos archivos genéricos.
   - **Vista previa de links en la web:** depende de microlink.io (se puede desactivar desde ⋮).
+  - **Renglón final:** si dos dispositivos editan a la vez una nota que termina en tabla, al fusionarse pueden quedar dos renglones vacíos al final. Ese renglón vacío también sale en el PDF y el docx (no se nota).
   - **Tablas:** en el celular el ancho se cambia desde el panel (− / +), no arrastrando el borde con el dedo. Los anchos y altos no se exportan: en el PDF las columnas salen del mismo ancho y en el docx las reparte Word. Lo copiado (fila o columna) se pierde al cerrar la app. Ordenar reemplaza la tabla entera: si otro dispositivo edita esa tabla al mismo tiempo, la fusión de cambios puede perder lo que haya escrito en las filas que se movieron.
   - **Sin probar en el dispositivo por Claude:** desde la v0.1.0 (vista compacta, link y pedidos de acceso, ocultas, estadísticas, título automático y tablas) las confirma el usuario.
   - **`package.json`** dice `"version": "0.0.12"`, pero la versión real sale de los tags: no se usa.
@@ -111,6 +114,7 @@ Vite 6 (target es2022, `base: './'`) + Capacitor 7. Todo el código de la app es
 - **Alto:** `height` en cada fila (`Fila`, extensión de TableRow), con `style="height:Npx"`, funciona como mínimo.
 - **Color de fondo:** atributo `bg` en `Celda`/`CeldaEncabezado` (`data-bg="<clave>"`), paleta `CELL_BG` en `editor.js`; los colores están en `styles.css` (claro y `[data-scheme="dark"]`) y, para exportar, en `CELL_BG_HEX` de `transfer.js` (si se cambia la paleta, cambiar los tres). Se aplica con `setCellsAttrs(editor, scope, { bg })`. Lo copiado (fila/columna) conserva el color.
 - **Ordenar:** `sortTable(editor, dir, kind)` y `parseCellNumber(text)` en `editor.js`; arma la tabla con las filas en el nuevo orden (`replaceWith`) y deja el cursor en la misma columna, primera fila ordenada. En `main.js`, `doSort` (snackbar + Deshacer) y el grupo `#tbl-sort-group` del panel.
+- **Renglón final:** extensión `RenglonFinal` (solo en `createEditor`, no en `contentExtensions`): `appendTransaction` que agrega un párrafo si `needsTrailingParagraph(doc)` (último nodo `table` o `image`) y la transacción no viene de otro dispositivo (`ySyncPluginKey` con `isChangeOrigin`). En `main.js`, un `click` en `#editor-scroll` por debajo del último elemento de `.ProseMirror` llama a `writeAtEnd` (agrega el párrafo si falta, cursor al final y `focus()`, que abre el teclado). `runTableCommand` `textBefore`/`textAfter` usan el párrafo vacío vecino si existe.
 - **Menú de la celda:** `bindCellPress` (en `bindEditorUi`) escucha en `#editor` `touchstart`/`touchmove`/`touchend` (temporizador de 520 ms) y `contextmenu`; `placeCursorAt` (editor.js) ubica el cursor en la celda tocada (sin perder una selección de varias celdas); `openCellMenu` usa `openMenu` con un "ancla" falsa en el punto tocado y la clase `cell-menu`. Para que soltar el dedo no cierre el menú: `touchend` con `preventDefault` y el fondo (`#scrim`) ignora clics durante 400 ms (`cellMenuAt`).
 - **Funciones** (`editor.js`): `tableSizes` (modos y medidas actuales con `nodeDOM`), `setColumnWidth`, `setColumnsMode`, `setRowHeight`, `setRowsMode`, `copyTablePart`, `insertCopied`, `duplicateTablePart` y `getTableClip`. Lo copiado se guarda como JSON (cada editor tiene su propio esquema) y se rearma con `schema.nodeFromJSON`. Las columnas se insertan con `TableMap.positionAt`, de la última fila a la primera. `#table-bar` está en `index.html`, arriba de `#toolbar`; la clase `in-table` en `#view-editor` agranda el margen inferior del editor.
 
@@ -190,3 +194,4 @@ La tabla completa de versiones está en el `README.md`.
 | v0.2.0 (2026-11-25) | Tablas, Parte B2: color de fondo por celda/fila/columna/tabla (también en PDF y docx), ordenar filas por una columna (texto y números), menú al mantener apretada una celda (clic derecho en la PC), botón de color en la barra de tabla |
 | v0.2.1 (2026-11-25) | Dispositivos viejos, Parte 1: web compatible con WebView de Android 5/6 (respaldos de `color-mix` y `:has`, pdfjs legacy, recordatorios sin cierre en Android 5, aviso de WebView vieja, Android/WebView en "Versión") |
 | v0.2.2 (2026-11-25) | Dispositivos viejos, Parte 2: un solo APK con mínimo Android 5.0 (`minSdkVersion` 21, `firebase-auth` 22.3.1, `@capacitor/filesystem` 7.0.1, `overrideLibrary` de Cordova), verificación con `aapt` en el CI y tabla "¿Qué archivo bajar?" en la Release |
+| v0.2.3 (2026-11-25) | Tablas: renglón vacío siempre debajo de una tabla (o imagen) al final de la nota, tocar debajo para escribir, y "Escribir arriba/debajo de la tabla" en el menú de la celda |
