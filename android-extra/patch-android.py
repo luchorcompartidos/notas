@@ -92,6 +92,18 @@ receiver = '''
 if 'NotaRapidaWidget' not in m:
     m = m.replace('</application>', receiver + '    </application>', 1)
 
+# Atrapador de cierres (AnoteApp + CierreActivity en proceso aparte): muestra el error en vez de
+# "Se ha detenido la aplicación". Solo actúa si la app se cae.
+if '.AnoteApp' not in m:
+    assert 'android:name=' not in m.split('<application', 1)[1].split('>', 1)[0], 'El <application> ya tiene android:name'
+    m = m.replace('<application', '<application\n        android:name=".AnoteApp"', 1)
+cierre = '''
+        <activity android:name=".CierreActivity" android:process=":cierre" android:exported="false"
+            android:excludeFromRecents="true" android:theme="@android:style/Theme.Material.Light" />
+'''
+if 'CierreActivity' not in m:
+    m = m.replace('</application>', cierre + '    </application>', 1)
+
 open(m_path, 'w', encoding='utf-8').write(m)
 
 # 4. Dependencia para la huella (BiometricPrompt)
@@ -102,4 +114,5 @@ if 'androidx.biometric' not in g:
     open(g_path, 'w', encoding='utf-8').write(g)
 assert 'android.intent.action.SEND' in m, 'No se pudo agregar "Compartir con…" al manifest'
 assert 'NotaRapidaWidget' in m, 'No se pudo agregar el widget al manifest'
+assert '.AnoteApp' in m and 'CierreActivity' in m, 'No se pudo agregar el atrapador de cierres al manifest'
 print('Proyecto Android ajustado: ícono, splash, widget, accesos directos, Compartir con… y huella')
