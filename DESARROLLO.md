@@ -17,22 +17,28 @@
 | Estado | En uso |
 | Última versión (Release) | v0.2.0 — 2026-11-25 |
 | Se conecta con | Firebase, proyecto **notas-pro-2026** (plan gratuito Spark; Firestore en modo producción) |
-| Dispositivos viejos (Android 5/6) | **Sí**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio. La adaptación del APK todavía no está hecha: es una etapa propia pendiente (ver sección 5) |
+| Dispositivos viejos (Android 5/6) | **Sí**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio. **Diagnóstico hecho (2026-11-25)**; la adaptación va por partes (ver secciones 2 y 3) |
 
 ## 2. Etapa actual
-**Tablas en las notas: Parte B2 hecha (v0.2.0, Minor). Las tablas quedan completas por ahora (combinar celdas, más adelante).**
-- Objetivo: tablas fáciles de insertar, ajustar, ampliar y modificar dentro de las notas, en la web y en el APK.
-- Parte A (v0.1.3) y Parte B1 (v0.1.4): ver Historial.
-- Hecho en la Parte B2 (v0.2.0):
-  - **Color de fondo:** 9 colores (amarillo, naranja, rojo, rosa, violeta, azul, celeste, verde, gris) y "Sin color", en el panel "Tabla" (grupo **Color de fondo y alineación**). Se aplica a la celda, la fila, la columna o la tabla, con el mismo selector "Aplicar a" de la alineación (respeta la selección de varias celdas). Se ve con colores propios en tema claro y oscuro, y sale en el PDF y el docx. En la barra de tabla, el botón de paleta toma el color de la celda actual y lleva directo a ese grupo.
-  - **Ordenar las filas** por la columna del cursor: A → Z, Z → A (texto, con "2" antes que "10") y por números (1 → 9, 9 → 1). La fila de encabezado no se mueve. Las celdas vacías (o sin número) van al final. Con igual valor se mantiene el orden previo. Snackbar con "Deshacer". No ordena si hay celdas combinadas (pegadas desde otro lado).
-  - **Menú de la celda:** al mantener apretada una celda en el celular (~0,5 s sin mover el dedo) o con clic derecho en la PC (Shift + clic derecho = menú del navegador). Reúne: color de fondo, copiar fila/columna, insertar lo copiado, duplicar, ordenar A→Z / Z→A, "Ordenar con números…", tamaño, todas las opciones y eliminar fila/columna.
-- En curso: nada a medio hacer.
+**APK para dispositivos viejos (Android 5/6): diagnóstico hecho, falta elegir el esquema y hacer las partes.**
+- Objetivo: que ANote... se instale y ande en la tablet Android 6.0.1 (32 bits) y en la Bangho AERO J1216 (Android 5.0, Intel x86).
+- Diagnóstico (2026-11-25), resumido:
+  - **Instalar:** Capacitor 7 y todos sus plugins toman la versión mínima de `variables.gradle` (hoy 23 = Android 6). El APK actual **ya se instala en Android 6**. Para Android 5 hay que bajar `minSdkVersion` a 21; el código nativo de Capacitor 7 y de los plugins tiene sus `SDK_INT` cubiertos, salvo un caso (ver abajo).
+  - **Arquitectura:** el APK no tiene bibliotecas nativas (`lib/`): es **universal**. Anda en armeabi-v7a y también en x86 (la Bangho lo corre sin traductor). No hace falta separar por arquitectura como en Flutter.
+  - **Recordatorios en Android 5:** `reminders.js` programa con `allowWhileIdle: true` y el plugin usa `setExactAndAllowWhileIdle` (Android 6+) sin control: en Android 5 se cerraría al crear un recordatorio. Arreglo: `allowWhileIdle` solo en Android 6 o más.
+  - **WebView (lo principal):** la app corre dentro de "Android System WebView". La de fábrica de Android 5/6 (Chromium 37–44) no sirve. Con la WebView actualizada desde Play Store, el máximo es **Chromium 95** en Android 5 y **106** en Android 6. La web se compila con `es2022` (pide Chromium 94 o más): alcanza en los dos casos si la WebView está actualizada.
+  - **CSS:** `color-mix` (10 usos, pide Chromium 111) y `:has` (3 usos, pide 105) no andan en esas WebView: algunos fondos quedan transparentes y el snackbar del editor puede quedar tapado. Arreglo: color de respaldo antes de cada `color-mix` y una clase en lugar de `:has` (no cambia nada en la web ni en el celular).
+  - **Importar PDF:** `pdfjs-dist` 4 usa `Promise.withResolvers`, `Promise.try`, `structuredClone` y `AbortSignal.any` (Chromium 98–128): en las tablets fallaría. Arreglo: usar la compilación `legacy` de pdfjs (se carga solo al importar un PDF). El resto del paquete (Tiptap, Yjs, Firebase, docx, jspdf, mammoth) está bien o ya tiene control.
+  - **Inicio de sesión con Google:** Google Play services dejó de actualizarse en Android 5 en julio de 2024 (sigue en Android 6). El plugin prueba Credential Manager y, si falla, el método clásico (`play-services-auth` 20.7.0), que debería andar con Play services viejos. Solo se sabe probando.
+  - **Firebase nativo:** `@capacitor-firebase/authentication` 7.5 usa `firebase-auth` 23.1.0 (anterior al cambio de Firebase a mínimo Android 6 de julio de 2025). Si la compilación con mínimo 21 lo rechaza, se fija una versión anterior en `variables.gradle`.
+- En curso: nada a medio hacer (no se tocó código).
 
 ## 3. Próximos pasos
-1. **El usuario prueba la v0.2.0** en la web y en el celular: color de fondo, ordenar, y el menú al mantener apretada una celda (que no se cierre al soltar el dedo y que no aparezca encima el menú de copiar/pegar de Android).
-2. Etapa propia: **APK para dispositivos viejos** (ver sección 5).
-3. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx.
+1. **El usuario elige el esquema del APK** (un solo APK para todos con mínimo Android 5, o dos APK como en la guía) y revisa la versión de "Android System WebView" en las dos tablets (Ajustes → Aplicaciones → Android System WebView), actualizándola desde Play Store si se puede.
+2. **Parte 1 (Patch):** web compatible con WebView viejas: respaldos de `color-mix` y `:has`, pdfjs `legacy`, `allowWhileIdle` solo en Android 6+, y aviso en español si la WebView es demasiado vieja (en vez de pantalla en blanco). Mostrar Android y WebView en "Estadísticas e Info"/"Acerca de".
+3. **Parte 2 (Patch):** APK con `minSdkVersion` 21 según el esquema elegido, y la tabla "¿Qué archivo bajar?" en la Release.
+4. **Parte 3:** el usuario prueba en el celular y en las dos tablets (instalar, iniciar sesión, sincronizar, recordatorio, tabla); se corrige lo que aparezca.
+5. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx.
 
 ## 4. Decisiones tomadas
 - **Un solo código** para la web y Android (Capacitor), con el aspecto lo más parecido posible en las dos, que en Android se sienta nativa. Backend gratis (Firebase Spark) y hosting en GitHub.
@@ -58,11 +64,7 @@
 - **Versiones:** cada pedido define el tipo de Release (la mayoría Patch; la v0.1.0 y la v0.2.0 fueron Minor; las tablas Parte A y B1 fueron Patch por elección del usuario). Si hay otras preguntas pendientes, el tipo de Release se pregunta al final; si no, se avanza con Patch y se avisa el número.
 
 ## 5. Pendientes / dudas abiertas
-- [ ] **APK para dispositivos viejos** (tablet Android 6.0.1 de 32 bits y Bangho Android 5.0). La guía de Flutter no se aplica tal cual porque ANote... es Capacitor. A verificar en esa etapa:
-  - Capacitor 7 pide como mínimo Android 6.0 (API 23): la tablet Android 5.0 quedaría afuera, salvo con un APK aparte en una versión vieja de Capacitor (a evaluar el costo).
-  - La web se compila con `target: es2022` y usa CSS moderno (`color-mix`, `:has`). Con el WebView de fábrica de Android 5/6 no anda: hay que actualizar "Android System WebView" desde Play Store o compilar un APK aparte con un target más viejo.
-  - El inicio de sesión con Google nativo y las versiones mínimas de Firebase en Android 5/6.
-  - Las tablas no agregan requisitos nuevos: usan lo mismo que el resto del editor (revisado también en las Partes B1 y B2: colores sólidos sin `color-mix`, sin `Object.fromEntries`, `Intl.Collator` con respaldo, eventos táctiles comunes).
+- [ ] **APK para dispositivos viejos:** diagnóstico hecho (ver sección 2). Pendiente: elegir el esquema y hacer las Partes 1 a 3.
 - [ ] **App Links** (que el link de una nota abra la app en vez de la web). Requiere que el usuario cree el repo vacío `luchorcompartidos.github.io` (Claude no puede crear repos). Después hay que subir ahí `.well-known/assetlinks.json` con el paquete `io.github.luchorcompartidos.notas` y el SHA-256 de la firma: `F3:CC:EE:75:71:9A:9E:A6:13:FD:C2:0E:30:33:49:48:C3:1A:0C:67:77:60:B4:97:B5:C5:9C:3F:E3:AD:3B:D9`. Además hay que agregar en `patch-android.py` el intent-filter `autoVerify` para `https://luchorcompartidos.github.io/notas/`.
 - **Limitaciones conocidas:**
   - **Sin notificaciones push:** con la app cerrada no llegan los pedidos de acceso, ni las invitaciones, ni los recordatorios creados en otro dispositivo; se ven y se programan al abrir la app. Hacerlo requiere el plan Blaze (Cloud Functions + FCM).
