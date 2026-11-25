@@ -4,7 +4,7 @@ App de notas con **web + Android (Capacitor)** a partir de un solo código, con 
 dispositivos y **fusión de cambios** (Yjs + Firestore).
 
 - Web: `https://luchorcompartidos.github.io/notas/`
-- APK: en **Releases** (`notas-vX.Y.Z.apk`)
+- APK: en **Releases** (`notas-vX.Y.Z.apk`), un solo APK para todos los equipos con **Android 5.0 o más**. En tablets con Android 5 o 6, actualizar antes «Android System WebView» desde Play Store (versión 94 o más)
 
 ## Estado
 
@@ -28,6 +28,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | — | v0.1.4 | **Tablas (Parte B1)**: ancho de columnas automático, iguales o manual (con − / + o un número, también en el celular), alto de filas automático, iguales o manual, copiar una fila o columna e insertarla con su contenido entre otras (también en otra tabla u otra nota), duplicar fila o columna, botón «↔ Tamaño» en la barra de tabla |
 | — | v0.2.0 | **Tablas (Parte B2)**: color de fondo por celda, fila, columna o tabla (9 colores, en claro y oscuro, también en PDF y docx), ordenar las filas por una columna (A→Z, Z→A, números de menor a mayor y al revés; el encabezado no se mueve), menú al mantener apretada una celda en el celular (clic derecho en la PC) con color, copiar/insertar, duplicar, ordenar, tamaño y eliminar |
 | — | v0.2.1 | **Dispositivos viejos (Parte 1)**: la app anda con las WebView de Android 5/6 actualizadas (Chromium 94 o más): colores de respaldo donde falta `color-mix`, snackbar y tarjetas sin `:has`, importar PDF con la versión «legacy» de pdfjs, recordatorios sin cierre en Android 5, aviso en español si la WebView es demasiado vieja (con enlace a Play Store) y Android/WebView del equipo en «Versión» |
+| — | v0.2.2 | **Dispositivos viejos (Parte 2)**: el APK se instala desde **Android 5.0** (antes, desde Android 6); sigue siendo un solo APK para todos. La Release trae la tabla «¿Qué archivo bajar?» y la nota sobre la WebView |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
 
