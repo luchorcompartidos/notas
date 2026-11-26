@@ -186,6 +186,18 @@
     </section>
   </div>
 
+  <!-- Pedido obligatorio del administrador: pasar a la contraseña propia de ANote (v0.4.0) -->
+  <div id="ask-gate" class="ask-gate" hidden>
+    <div class="ask-card">
+      <h2><span data-icon="lock"></span>Pedido del administrador</h2>
+      <p>El administrador de ANote pide que pases a la <strong>contraseña propia de ANote</strong> para seguir usando la app, así tus notas no dependen de la contraseña de Google.</p>
+      <p>Es la misma cuenta: conservás tus notas, las compartidas y los ajustes. Usá un correo distinto de tu Gmail y una contraseña que no uses en otro lado.</p>
+      <p class="ask-step" id="ask-gate-step"></p>
+      <button class="filled-btn ripple" id="ask-gate-go">Pasar a contraseña propia</button>
+      <button class="text-btn ripple" id="ask-gate-out">Cerrar sesión</button>
+    </div>
+  </div>
+
   <div id="scrim" class="scrim"></div>
   <div id="menu" class="menu" role="menu" hidden></div>
 

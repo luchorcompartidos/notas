@@ -771,6 +771,22 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
 .rl-small { font-size: 13px; }
 .rl-vname { text-transform: none; letter-spacing: 0; font-weight: 500; }
 
+/* ---------- Administración de usuarios (v0.4.0) ---------- */
+.adm .hm-list { max-height: 42vh; }
+.adm-row .rem-text small { white-space: normal; }
+.adm-row .picker-item:disabled { opacity: 1; }
+.adm-self { opacity: .35; }
+.adm-status { color: var(--primary) !important; font-weight: 500; }
+.adm-label { font-size: 13px; color: var(--on-surface-variant); }
+.adm-help summary { cursor: pointer; padding: 8px 0; font-size: 14px; color: var(--primary); }
+.ask-gate { position: fixed; inset: 0; z-index: 22; background: var(--surface); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.ask-card { max-width: 440px; display: flex; flex-direction: column; gap: 12px; }
+.ask-card h2 { margin: 0; font-size: 22px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+.ask-card p { margin: 0; line-height: 1.45; }
+.ask-card .ask-step { font-weight: 500; }
+.ask-card .filled-btn { align-self: stretch; justify-content: center; }
+.ask-card .text-btn { align-self: center; }
+
 /* ---------- WebView viejas (Android 5/6, Chromium 95–106) ----------
    Solo se aplica donde no existe color-mix() o :has(); en la web y en los celulares actuales no cambia nada. */
 @supports not (color: color-mix(in srgb, red 50%, blue)) {

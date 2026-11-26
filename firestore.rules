@@ -1,7 +1,7 @@
 rules_version = '2';
 
-// Reglas de seguridad de Firestore para ANote (v0.3.0: inicio con correo y contraseña propia; antes, v0.1.0:
-// notas compartidas, imágenes aparte, historial y pedidos de acceso).
+// Reglas de seguridad de Firestore para ANote (v0.4.0: administración de usuarios; v0.3.0: inicio con correo
+// y contraseña propia; v0.1.0: notas compartidas, imágenes aparte, historial y pedidos de acceso).
 // Se pegan en Firebase → Firestore Database → Reglas → Publicar.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -146,6 +146,41 @@ service cloud.firestore {
       allow delete: if request.auth != null && request.auth.uid == uid
         && request.auth.token.firebase.sign_in_provider == 'password'
         && request.auth.token.auth_time > request.time.toMillis() / 1000 - 600;
+    }
+
+    // Administradores de ANote: el documento admins/{uid} se crea a mano en la consola de Firebase
+    // (Firestore Database → Iniciar colección «admins» → ID del documento = UID del usuario). Desde la app no
+    // se puede crear ni cambiar.
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    match /admins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Directorio de usuarios (v0.4.0): cada uno escribe su ficha al abrir ANote; la lee el administrador.
+    match /directory/{uid} {
+      allow read: if (request.auth != null && request.auth.uid == uid) || isAdmin();
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'email', 'providers', 'passwordOnly', 'verified',
+             'signedIn', 'created', 'platform', 'version', 'lastSeen'])
+        && request.resource.data.email == request.auth.token.get('email', '')
+        && request.resource.data.name is string && request.resource.data.name.size() <= 80
+        && request.resource.data.lastSeen == request.time;
+      allow delete: if isAdmin() || (signedIn() && request.auth.uid == uid);
+    }
+
+    // Pedidos del administrador para cada usuario (v0.4.0): cerrar la sesión en todos sus dispositivos
+    // (revokedAt) y pasar a la contraseña propia (ask). Los lee el propio usuario (aun con una sesión de Google
+    // ya rechazada) y el administrador; solo el administrador los escribe.
+    match /control/{uid} {
+      allow read: if (request.auth != null && request.auth.uid == uid) || isAdmin();
+      allow create, update: if isAdmin() && uid != request.auth.uid
+        && request.resource.data.keys().hasOnly(['by', 'at', 'revokedAt', 'ask'])
+        && request.resource.data.by == request.auth.uid
+        && request.resource.data.get('ask', 'suggest') in ['suggest', 'require'];
+      allow delete: if isAdmin();
     }
 
     // Organización personal de cada usuario (color, carpetas, etiquetas, recordatorios, preferencias).

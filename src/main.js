@@ -36,6 +36,7 @@ import {
   signInEmail, signUpEmail, sendVerification, resetPassword, refreshUser, setDisplayName, linkPassword, unlinkPassword,
   finishPasswordOnly, relinkGoogle, googleSessionBlocked, changePassword, passwordProblem, hasGoogle, hasPassword, passwordEmail, passwordVerified,
 } from './firebase.js';
+import { checkAdmin, cachedAdmin, touchDirectory, watchControl, listUsers, applyAdmin, sessionStart, ms } from './admin.js';
 
 const $ = (s) => document.querySelector(s);
 const root = document.documentElement;
@@ -2184,6 +2185,7 @@ function startCloud(user) {
   startRepo(new CloudRepo(fb().db, user.uid, { name: displayName(user), email: user.email, verified }), 'cloud');
   updateVerifyBanner();
   checkSession();
+  startAdminBits(user);
 }
 
 // Nombre visible: el de la cuenta, el que se escribió al registrarse (si todavía no llegó) o el del correo.
@@ -2446,6 +2448,7 @@ function maybeSecurityTip() {
 function showAccountSecurity() {
   const u = state.user;
   if (state.mode !== 'cloud' || !u) return;
+  updateAskGate(); touchDir();
   const g = hasGoogle(u); const p = hasPassword(u);
   const pe = passwordEmail(u); const ver = passwordVerified(u);
   let part;
@@ -2471,6 +2474,7 @@ function showAccountSecurity() {
   }
   openSheet(`<h2 class="sheet-title">${icon('lock')} Seguridad de la cuenta</h2>
     <p class="sheet-text"><strong>${esc(displayName(u))}</strong> · ${esc(accountKind(u))}</p>
+    ${state.control?.ask && !hasPasswordOnly(u) ? `<p class="sheet-text adm-status">El administrador de ANote pide que pases a la contraseña propia (${state.control.ask === 'require' ? 'obligatorio: hasta terminar el cambio no se puede usar la app' : 'sugerido'}).</p>` : ''}
     ${g ? securityTipHtml() : ''}
     ${part}
     ${p ? `<div class="sheet-actions"><span class="spacer"></span><button class="text-btn ripple" id="sec-pw">${icon('lock')}<span>Cambiar la contraseña</span></button></div>` : ''}
@@ -2493,6 +2497,7 @@ function showAccountSecurity() {
       try {
         await finishPasswordOnly(pw);
         state.user = fb().auth.currentUser;
+        updateAskGate(); touchDir();
         closeOverlays();
         openSheet(`<h2 class="sheet-title">Listo</h2>
           <p class="sheet-text">Desde ahora entrás a ANote con <strong>${esc(pe)}</strong> y tu contraseña propia («Entrar con correo»). Las sesiones de Google que estén abiertas en otros dispositivos se cierran al abrir ANote.</p>
@@ -2521,6 +2526,249 @@ function showAccountSecurity() {
       } catch (e) { accountError(e, 'No se pudo guardar el nombre'); }
     });
     on('sec-tip', () => { const off = !state.org.settings.secTipOff; state.repo.saveSettings({ secTipOff: off }); state.org.settings.secTipOff = off; showAccountSecurity(); });
+  });
+}
+
+/* ---------- Administración de usuarios (v0.4.0; datos en admin.js) ---------- */
+// Al entrar con cuenta: ficha en el directorio, pedidos del administrador y ¿es administrador?
+let controlUnsub = null;
+async function startAdminBits(user) {
+  state.isAdmin = cachedAdmin(user.uid);
+  state.control = null;
+  state.authTime = await sessionStart(user);
+  if (state.mode !== 'cloud' || state.user?.uid !== user.uid) return;
+  touchDir();
+  controlUnsub?.();
+  controlUnsub = watchControl(user.uid, onControl);
+  const yes = await checkAdmin(user.uid);
+  if (yes !== state.isAdmin) { state.isAdmin = yes; if ($('#drawer').classList.contains('open')) renderDrawer(); }
+}
+
+function touchDir() {
+  const u = state.user;
+  if (state.mode !== 'cloud' || !u) return;
+  touchDirectory(u, { name: displayName(u), platform: isNative ? 'android' : 'web', version: APP_VERSION, signedIn: state.authTime });
+}
+
+// Pedidos del administrador para este usuario
+function onControl(data, fromServer) {
+  state.control = data;
+  const rev = ms(data?.revokedAt);
+  // Solo con el dato del servidor (no el de la copia local) y si la sesión empezó antes del pedido
+  if (rev && fromServer && state.authTime && rev > state.authTime) { forcedSignOut(); return; }
+  updateAskGate();
+}
+
+let forcing = false;
+async function forcedSignOut() {
+  if (forcing) return;
+  forcing = true;
+  try {
+    await closeEditor();
+    // Antes de cerrar, se intenta subir lo que quedó pendiente (como mucho 15 segundos)
+    await Promise.race([
+      (async () => { await state.repo?.waitWrites?.(8000); await flushPendingNotes(); })(),
+      new Promise((r) => setTimeout(r, 15000)),
+    ]);
+  } catch { /* se cierra igual */ }
+  localStorage.removeItem('notas-mode');
+  sessionStorage.setItem('notas-login-msg', 'El administrador de ANote cerró tu sesión en todos tus dispositivos. Volvé a entrar.');
+  await signOutUser();
+  location.replace(location.pathname);
+}
+
+// Pedido de pasar a la contraseña propia: «sugerido» (aviso una vez por día) u «obligatorio» (pantalla
+// que tapa la app hasta terminar el cambio o cerrar la sesión). Si ya entra solo con contraseña, nada.
+let askTimer = null;
+function updateAskGate() {
+  const u = state.user;
+  const ask = state.mode === 'cloud' && u && !hasPasswordOnly(u) ? state.control?.ask : null;
+  const gate = $('#ask-gate');
+  gate.hidden = ask !== 'require';
+  if (ask === 'require') {
+    const p = hasPassword(u); const ver = passwordVerified(u);
+    $('#ask-gate-step').textContent = !p
+      ? 'Paso 1 de 3: agregar un correo (distinto de tu Gmail) y una contraseña propia de ANote.'
+      : !ver ? `Paso 2 de 3: verificar el correo ${passwordEmail(u)} (tocá el link que te mandamos; mirá también en spam).`
+        : 'Último paso: confirmar la contraseña y desvincular Google.';
+    $('#ask-gate-go').textContent = p ? 'Continuar' : 'Pasar a contraseña propia';
+  }
+  clearTimeout(askTimer);
+  if (ask !== 'suggest') return;
+  const today = new Date().toDateString();
+  let seen = null;
+  try { seen = localStorage.getItem(`notas-ask-seen-${u.uid}`); } catch { /* nada */ }
+  if (seen === today) return;
+  // Se muestra cuando no hay otro panel abierto (por ejemplo, el aviso de seguridad al entrar)
+  const tryShow = (n) => {
+    askTimer = setTimeout(() => {
+      if (state.control?.ask !== 'suggest' || hasPasswordOnly(state.user)) return;
+      const busy = $('#sheet').classList.contains('open') || !$('#dialog').hidden || $('#drawer').classList.contains('open');
+      if (busy) { if (n < 20) tryShow(n + 1); return; }
+      try { localStorage.setItem(`notas-ask-seen-${u.uid}`, today); } catch { /* nada */ }
+      openSheet(`<h2 class="sheet-title">${icon('lock')} Pedido del administrador</h2>
+        <p class="sheet-text">El administrador de ANote te sugiere <strong>pasar a la contraseña propia de ANote</strong>, para que tus notas no dependan de la contraseña de Google.</p>
+        <p class="sheet-text">${esc(PW_OPTION_TEXT)}</p>
+        <div class="sheet-actions"><button class="text-btn ripple" id="ask-later">Más tarde</button><span class="spacer"></span>
+          <button class="filled-btn ripple" id="ask-go">Ver cómo</button></div>`, (b) => {
+        b.querySelector('#ask-later').addEventListener('click', () => { closeOverlays(); snackbar('Podés hacerlo desde ⋮ Menú → Seguridad de la cuenta'); });
+        b.querySelector('#ask-go').addEventListener('click', showAccountSecurity);
+      });
+    }, n ? 3000 : 1500);
+  };
+  tryShow(0);
+}
+$('#ask-gate-go').addEventListener('click', showAccountSecurity);
+$('#ask-gate-out').addEventListener('click', doSignOut);
+
+// Pantalla de administración (solo para quien está en admins/{uid})
+const adm = { users: null, sel: new Set(), q: '', view: 'all', more: false, loading: false, error: '' };
+const ADM_DATE = { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' };
+const admDate = (t) => (t ? new Date(t).toLocaleString('es-AR', ADM_DATE) : '—');
+function admHow(x) {
+  const g = (x.providers || []).includes('google.com'); const p = (x.providers || []).includes('password');
+  if (x.passwordOnly || (p && !g)) return 'Contraseña propia';
+  if (g && p) return 'Google + contraseña (cambio sin terminar)';
+  return g ? 'Google' : '—';
+}
+
+function showUsersAdmin() {
+  if (state.mode !== 'cloud' || !state.isAdmin) return;
+  const me = state.user.uid;
+  const shown = () => {
+    const q = normalize(adm.q).trim();
+    return (adm.users || [])
+      .filter((x) => (adm.view === 'google' ? (x.providers || []).includes('google.com')
+        : adm.view === 'password' ? !!x.passwordOnly
+          : adm.view === 'pending' ? !!(x.control?.ask || x.control?.revokedAt) : true))
+      .filter((x) => !q || normalize(`${x.name || ''} ${x.email || ''}`).includes(q))
+      .sort((a, b) => (Number(b.uid === me) - Number(a.uid === me)) || (ms(b.lastSeen) - ms(a.lastSeen)));
+  };
+  const status = (x) => {
+    const out = [];
+    const c = x.control || {};
+    const rev = ms(c.revokedAt);
+    if (rev) out.push(`Sesión cerrada el ${admDate(rev)}${(x.signedIn || 0) > rev ? ' (volvió a entrar)' : ' (todavía no volvió a entrar)'}`);
+    if (c.ask) out.push(`Pedido: contraseña propia, ${c.ask === 'require' ? 'obligatorio' : 'sugerido'}${x.passwordOnly ? ' (cumplido)' : ''}`);
+    return out;
+  };
+  const draw = (body) => {
+    const all = adm.users || [];
+    [...adm.sel].forEach((uid) => { if (!all.some((x) => x.uid === uid) || uid === me) adm.sel.delete(uid); });
+    const list = shown();
+    const pickable = list.filter((x) => x.uid !== me);
+    const allSel = pickable.length > 0 && pickable.every((x) => adm.sel.has(x.uid));
+    const someSel = pickable.some((x) => adm.sel.has(x.uid));
+    const n = (pred) => all.filter(pred).length;
+    const seg = (v, label) => `<button class="chip ripple${adm.view === v ? ' on' : ''}" data-view="${v}"><span>${label}</span></button>`;
+    body.querySelector('.hm-head').innerHTML = adm.users ? `<div class="hm-segs">
+      ${seg('all', `Todos (${all.length})`)}${seg('google', `Con Google (${n((x) => (x.providers || []).includes('google.com'))})`)}
+      ${seg('password', `Contraseña propia (${n((x) => !!x.passwordOnly)})`)}${seg('pending', `Con pedidos (${n((x) => !!(x.control?.ask || x.control?.revokedAt))})`)}</div>` : '';
+    let html;
+    if (adm.loading && !adm.users) html = '<p class="sheet-text">Cargando…</p>';
+    else if (adm.error) html = `<p class="sheet-text">${esc(adm.error)}</p>`;
+    else {
+      html = (pickable.length ? `<button class="picker-item ripple hm-all" data-all="1"><span class="checkbox ${allSel ? 'all' : someSel ? 'some' : 'none'}"></span><span>Seleccionar todos (${pickable.length})</span></button>` : '')
+        + (list.map((x) => {
+          const self = x.uid === me;
+          const sel = adm.sel.has(x.uid);
+          const st = status(x);
+          return `<div class="hm-row adm-row${sel ? ' sel' : ''}">
+          <button class="picker-item ripple" data-uid="${esc(x.uid)}" aria-pressed="${sel}" ${self ? 'disabled' : ''}>
+            <span class="checkbox ${sel ? 'all' : 'none'}${self ? ' adm-self' : ''}"></span>
+            <span class="rem-text"><strong>${esc(x.name || x.email || 'Sin nombre')}${self ? ' (vos)' : ''}</strong>
+              <small>${esc(x.email || '')}${x.email ? ' · ' : ''}${esc(admHow(x))}${x.verified === false ? ' · correo sin verificar' : ''}</small>
+              ${x.removed ? '<small>Quitado del listado (solo quedan sus pedidos)</small>'
+    : `<small>Último uso: ${esc(admDate(ms(x.lastSeen)))}${x.platform ? ` · ${x.platform === 'android' ? 'Android' : 'Web'}` : ''}${x.version ? ` · v${esc(x.version)}` : ''} · inicio de sesión: ${esc(admDate(x.signedIn))}</small>`}
+              ${st.map((t) => `<small class="adm-status">${esc(t)}</small>`).join('')}</span>
+          </button></div>`;
+        }).join('') || `<p class="sheet-text">${adm.q ? 'Ningún usuario coincide con la búsqueda.' : 'No hay usuarios en esta vista.'}</p>`);
+    }
+    body.querySelector('.hm-list').innerHTML = html;
+    const nSel = adm.sel.size;
+    body.querySelector('.hm-count').textContent = nSel ? `${nSel} seleccionado${nSel > 1 ? 's' : ''}` : 'Elegí uno, varios o todos';
+    body.querySelectorAll('[data-act]').forEach((b) => { if (!['more', 'reload'].includes(b.dataset.act)) b.disabled = !nSel || adm.loading; });
+    body.querySelector('.hm-manage').hidden = !adm.more;
+    body.querySelector('[data-act="more"]').classList.toggle('on', adm.more);
+    hydrateIcons(body);
+  };
+  const load = async (body) => {
+    adm.loading = true; adm.error = ''; draw(body);
+    try { adm.users = await listUsers(); } catch (e) {
+      console.warn('Administración de usuarios', e);
+      adm.error = e?.code === 'permission-denied'
+        ? 'El servidor rechazó la consulta. ¿Pegaste las reglas nuevas (v0.4.0) en Firebase → Firestore Database → Reglas → Publicar?'
+        : `No se pudo cargar el listado (${e?.code || e?.message || e}). Revisá la conexión y tocá «Actualizar».`;
+    } finally { adm.loading = false; }
+    if (body.isConnected) draw(body);
+  };
+  const run = async (body, what, uids) => {
+    const nU = uids.length; const who = nU > 1 ? `${nU} usuarios` : '1 usuario';
+    const ask = {
+      revoke: { title: `¿Cerrar la sesión de ${who} en todos sus dispositivos?`, text: 'Se cierra al instante en los dispositivos que tengan ANote abierta y, en los demás, la próxima vez que la abran con conexión. Para volver a usar ANote tienen que iniciar sesión otra vez (con Google, aparece el selector de cuentas). No es un bloqueo: para impedir que vuelvan a entrar, inhabilitá la cuenta en la consola de Firebase.', ok: 'Cerrar sesión', danger: true },
+      require: { title: `¿Pedir a ${who} que pasen a la contraseña propia, de forma obligatoria?`, text: 'Los que entran con Google no van a poder usar ANote hasta terminar el cambio (o cerrar la sesión). A los que ya usan la contraseña propia no les cambia nada.', ok: 'Pedir (obligatorio)' },
+      suggest: { title: `¿Sugerir a ${who} que pasen a la contraseña propia?`, text: 'Les aparece un aviso al abrir ANote, como mucho una vez por día, hasta que hagan el cambio o quites el pedido.', ok: 'Sugerir' },
+      clearAsk: { title: `¿Quitar el pedido de contraseña propia a ${who}?`, text: '', ok: 'Quitar el pedido' },
+      remove: { title: `¿Quitar a ${who} del listado?`, text: 'Solo se borra su ficha de este listado: la cuenta y sus notas siguen igual, y vuelve a aparecer la próxima vez que abra ANote. Sus pedidos (si tiene) se mantienen.', ok: 'Quitar', danger: true },
+    }[what];
+    if (!(await openDialog(ask))) return;
+    adm.loading = true; draw(body);
+    try {
+      await applyAdmin(uids, what, me);
+      adm.sel.clear();
+      snackbar({ revoke: 'Sesiones cerradas', require: 'Pedido obligatorio enviado', suggest: 'Sugerencia enviada', clearAsk: 'Pedido quitado', remove: 'Quitados del listado' }[what]);
+    } catch (e) {
+      console.warn('Administración de usuarios', e);
+      snackbar(e?.code === 'permission-denied' ? 'El servidor rechazó el cambio (¿reglas nuevas pegadas en Firebase?)' : 'No se pudo hacer el cambio: revisá la conexión');
+    } finally { adm.loading = false; }
+    load(body);
+  };
+  openSheet(`<div class="hm adm"><h2 class="sheet-title">${icon('adminUsers')} Administración de usuarios</h2>
+    <p class="sheet-text">Elegí uno, varios o todos para cerrarles la sesión en todos sus dispositivos o pedirles que pasen a la contraseña propia de ANote.</p>
+    <label class="field hm-search"><input type="search" id="adm-q" placeholder="Buscar por nombre o correo" value="${esc(adm.q)}"></label>
+    <div class="hm-head"></div>
+    <div class="picker-list hm-list"></div>
+    <div class="sheet-actions hm-actions sheet-actions-wrap">
+      <span class="hm-count"></span><span class="spacer"></span>
+      <button class="filled-btn ripple" data-act="revoke">${icon('logout')}<span>Cerrar sesión</span></button>
+    </div>
+    <div class="sheet-actions hm-actions sheet-actions-wrap">
+      <span class="adm-label">Contraseña propia:</span>
+      <button class="text-btn ripple" data-act="suggest">Sugerir</button>
+      <button class="text-btn ripple" data-act="require">Obligatorio</button>
+      <button class="text-btn ripple" data-act="clearAsk">Quitar el pedido</button>
+    </div>
+    <div class="sheet-actions">
+      <button class="chip chip-outline ripple" data-act="more">${icon('settings')}<span>Más</span></button>
+      <span class="spacer"></span>
+      <button class="text-btn ripple" data-act="reload">${icon('restore')}<span>Actualizar</span></button>
+    </div>
+    <div class="hm-manage" hidden>
+      <div class="sheet-actions"><button class="text-btn ripple" data-act="remove">${icon('delete')}<span>Quitar del listado</span></button></div>
+      <details class="adm-help"><summary>¿Cómo funciona?</summary>
+        <p class="sheet-text"><strong>Listado:</strong> lo arma ANote (Firebase no deja listar las cuentas desde la app). Cada usuario aparece al abrir ANote desde la v0.4.0, y su ficha se actualiza al abrirla (como mucho cada 6 horas, o antes si cambia algo).</p>
+        <p class="sheet-text"><strong>Cerrar sesión:</strong> lo hace la app de cada dispositivo al recibir el pedido; no es un bloqueo en el servidor. Para bloquear de verdad: consola de Firebase → Authentication → Usuarios → ⋮ → <strong>Inhabilitar cuenta</strong>. No la borres: si vuelve a entrar, tendría una cuenta nueva y vacía.</p>
+        <p class="sheet-text"><strong>Google:</strong> no deja que una app obligue a pedir la contraseña de Google. Al volver a entrar aparece el selector de cuentas; si el dispositivo tiene la cuenta de Google abierta, entra sin contraseña. Para eso está la contraseña propia de ANote.</p>
+        <p class="sheet-text"><strong>Contraseña propia:</strong> «Sugerir» muestra un aviso al abrir ANote (una vez por día); «Obligatorio» tapa la app hasta terminar el cambio. Con la cuenta ya pasada, el pedido queda «cumplido».</p>
+      </details>
+    </div></div>`, (sheetBody) => {
+    const body = sheetBody.querySelector('.adm');
+    draw(body);
+    load(body);
+    body.querySelector('#adm-q').addEventListener('input', (e) => { adm.q = e.target.value; draw(body); });
+    body.addEventListener('click', (e) => {
+      const t = e.target.closest('button'); if (!t || !body.contains(t) || t.disabled) return;
+      if (t.dataset.view) { adm.view = t.dataset.view; draw(body); return; }
+      if (t.dataset.all) {
+        const list = shown().filter((x) => x.uid !== me); const allSel = list.every((x) => adm.sel.has(x.uid));
+        list.forEach((x) => (allSel ? adm.sel.delete(x.uid) : adm.sel.add(x.uid))); draw(body); return;
+      }
+      if (t.dataset.uid) { const id = t.dataset.uid; if (adm.sel.has(id)) adm.sel.delete(id); else adm.sel.add(id); draw(body); return; }
+      const act = t.dataset.act;
+      if (act === 'more') { adm.more = !adm.more; draw(body); return; }
+      if (act === 'reload') { load(body); return; }
+      if (act) run(body, act, [...adm.sel]);
+    });
   });
 }
 
@@ -2780,6 +3028,7 @@ function renderDrawer() {
     <div class="drawer-item"><button class="drawer-link ripple" id="drawer-autotitle">${icon('title')}<span class="drawer-label">Título automático${state.org.settings.autoTitleOn ? ' (activado)' : ''}</span></button></div>
     <div class="drawer-item"><button class="drawer-link ripple" id="drawer-copymode">${icon('copy')}<span class="drawer-label">Copiar celdas de tablas: ${COPY_MODE_LABEL[copyModeDefault()]}</span></button></div>
     ${state.mode === 'cloud' ? `<div class="drawer-item"><button class="drawer-link ripple" id="drawer-security">${icon('lock')}<span class="drawer-label">Seguridad de la cuenta</span></button></div>` : ''}
+    ${state.mode === 'cloud' && state.isAdmin ? `<div class="drawer-item"><button class="drawer-link ripple" id="drawer-admin">${icon('adminUsers')}<span class="drawer-label">Administración de usuarios</span></button></div>` : ''}
   `;
   $('#drawer-body').querySelectorAll('[data-kind]').forEach((b) => b.addEventListener('click', () => {
     setFilter(b.dataset.id ? { kind: b.dataset.kind, id: b.dataset.id } : { kind: b.dataset.kind });
@@ -2804,6 +3053,7 @@ function renderDrawer() {
   $('#drawer-autotitle').addEventListener('click', () => { closeOverlays(); showAutoTitleSettings(); });
   $('#drawer-copymode').addEventListener('click', () => { closeOverlays(); showCopyModeSettings(); });
   $('#drawer-security')?.addEventListener('click', () => { closeOverlays(); showAccountSecurity(); });
+  $('#drawer-admin')?.addEventListener('click', () => { closeOverlays(); showUsersAdmin(); });
 }
 
 /* ---------- Carpetas ---------- */
