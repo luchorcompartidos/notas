@@ -1701,6 +1701,9 @@ function bindEditorUi() {
 
   window.addEventListener('kbchange', () => {
     if (state.view === 'editor' && editor?.isFocused) setTimeout(() => editor?.commands.scrollIntoView(), 60);
+    // Campos de un panel (correo y contraseña): que el teclado no los tape
+    const a = document.activeElement;
+    if (a && $('#sheet').classList.contains('open') && $('#sheet').contains(a)) setTimeout(() => a.scrollIntoView({ block: 'center' }), 80);
   });
 }
 
@@ -2054,6 +2057,16 @@ function onVerified() {
   sessionStorage.setItem('notas-login-msg-ok', 'Correo verificado');
   closeOverlays();
   location.reload();
+}
+
+// Al volver a la app (por ejemplo, después de tocar el link en el correo): ¿ya se verificó?
+let recheckAt = 0;
+async function maybeRecheckVerified() {
+  const u = state.user;
+  if (state.mode !== 'cloud' || !hasPassword(u) || passwordVerified(u) || !navigator.onLine) return;
+  if (Date.now() - recheckAt < 5000) return;
+  recheckAt = Date.now();
+  try { const fresh = await refreshUser(); if (fresh && passwordVerified(fresh)) onVerified(); } catch { /* nada */ }
 }
 
 function updateVerifyBanner() {
@@ -3663,10 +3676,13 @@ async function runIntent(data) {
 function openNoteLink(url) {
   const i = String(url || '').indexOf('#');
   const h = i >= 0 ? parseNoteHash(String(url).slice(i)) : null;
-  if (!h) return; // link a la web sin nota: queda la lista
+  if (!h) { // link a la web sin nota (p. ej., «Continuar» después de verificar el correo): queda la lista
+    maybeRecheckVerified();
+    return;
+  }
   if (state.notes.some((n) => n.id === h.id)) openNote(h.id);
   else if (state.mode === 'cloud') showNoAccess(h.id, h.owner);
-  else snackbar('Para abrir el link de una nota, iniciá sesión con Google');
+  else snackbar('Para abrir el link de una nota, iniciá sesión (con Google o con correo)');
 }
 
 const linkify = (line) => esc(line).replace(/https?:\/\/[^\s<>"']+/gi, (u) => `<a href="${u}">${u}</a>`);
@@ -4513,7 +4529,7 @@ function init() {
         if (state.current && noteById(state.current.id)?.locked) goBack();
         renderList();
       }, 60000);
-    } else clearTimeout(lockTimer);
+    } else { clearTimeout(lockTimer); maybeRecheckVerified(); }
   });
 
   if (sessionStorage.getItem('notas-sec-tip')) { sessionStorage.removeItem('notas-sec-tip'); state.pendingSecTip = true; }

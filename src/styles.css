@@ -218,6 +218,8 @@ svg { fill: currentColor; display: block; }
   transform: translateY(105%); transition: transform .3s var(--ease); visibility: hidden;
 }
 .sheet.open { transform: none; visibility: visible; }
+/* Con el teclado abierto (Android), el panel queda arriba del teclado */
+.kb-open #sheet { bottom: var(--kb); max-height: calc(100vh - var(--kb) - 24px); }
 .sheet-handle { width: 32px; height: 4px; border-radius: 2px; background: var(--outline); opacity: .5; margin: 8px auto 16px; }
 .sheet-title { font-size: 18px; font-weight: 500; margin: 0 0 12px; }
 .sheet-text { font-size: 14px; color: var(--on-surface-variant); margin: 0 0 10px; }
