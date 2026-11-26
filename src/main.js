@@ -322,10 +322,89 @@ function matchesFilter(n, f = state.filter) {
     case 'trash': return n.trashed;
     case 'folder': return !n.trashed && !n.archived && (n.folders || []).includes(f.id);
     case 'label': return !n.trashed && !n.archived && (n.labels || []).includes(f.id);
-    // Las notas ocultas solo faltan en la vista principal de Notas
-    default: return !n.trashed && !n.archived && !n.hidden;
+    // Las notas ocultas (a mano o por reglas) solo faltan en la vista principal de Notas
+    default: return !n.trashed && !n.archived && !n.hidden && !hiddenByRules(n);
   }
 }
+
+/* ---------- Ocultar/mostrar por reglas (solo la pantalla principal) ----------
+ * settings/prefs.hideRules = { on, mode: 'hide'|'show', combine: 'any'|'all', keepPinned, rules: [...] }
+ * Se guarda siempre el objeto entero (rules es un arreglo: Firestore lo reemplaza, no lo fusiona). */
+const RULE_TYPES = [
+  ['label', 'Etiqueta', 'label'], ['folder', 'Carpeta', 'folder'], ['color', 'Color de la nota', 'palette'],
+  ['shared', 'Compartidas', 'people'], ['unorg', 'Sin organizar', 'removeFolder'], ['complete', 'Listas completas', 'checklist'],
+  ['age', 'Antigüedad', 'history'], ['locked', 'Bloqueadas con huella', 'lock'], ['template', 'Creadas desde una plantilla', 'template'],
+];
+const RULES_DEFAULT = { on: true, mode: 'hide', combine: 'any', keepPinned: true, rules: [] };
+let rulesMemo = null;
+
+function rulesCfg() {
+  const r = state.org.settings.hideRules || {};
+  return { ...RULES_DEFAULT, ...r, rules: Array.isArray(r.rules) ? r.rules : [] };
+}
+
+// La regla tiene efecto (las etiquetas/carpetas borradas no cuentan)
+function ruleActive(r) {
+  switch (r?.type) {
+    case 'label': return (r.ids || []).some((id) => labelById(id));
+    case 'folder': return (r.ids || []).some((id) => folderById(id));
+    case 'color': return !!r.colors?.length;
+    case 'shared': return state.mode === 'cloud' && (r.who !== 'owner' || !!r.owner);
+    case 'unorg': return ['folder', 'label', 'both'].includes(r.what);
+    case 'age': return Number(r.days) > 0;
+    case 'complete': case 'locked': case 'template': return true;
+    default: return false;
+  }
+}
+
+// Carpeta: conjunto con las elegidas (y sus subcarpetas, si se pidió)
+const withSet = (r) => (r.type === 'folder'
+  ? { ...r, set: new Set((r.ids || []).filter((id) => folderById(id)).flatMap((id) => (r.sub ? [id, ...descendantsOf(id)] : [id]))) }
+  : r);
+
+function rulesCtx() {
+  const cfg = rulesCfg();
+  const key = `${JSON.stringify(cfg)}|${state.org.folders.length}|${state.org.labels.length}|${state.user?.uid || ''}|${state.mode}`;
+  if (rulesMemo?.key === key) return rulesMemo;
+  const rules = cfg.on ? cfg.rules.filter(ruleActive).map(withSet) : [];
+  rulesMemo = { key, cfg, rules, now: Date.now() };
+  return rulesMemo;
+}
+
+function ruleMatch(r, n, now = Date.now()) {
+  switch (r.type) {
+    case 'label': return (n.labels || []).some((id) => r.ids.includes(id));
+    case 'folder': return (n.folders || []).some((id) => (r.set ? r.set.has(id) : r.ids.includes(id)));
+    case 'color': return r.colors.includes(n.color || 'default');
+    case 'shared': {
+      const other = !!n.owner && n.owner !== state.user?.uid;
+      if (r.who === 'withMe') return other;
+      if (r.who === 'owner') return n.owner === r.owner;
+      if (r.who === 'byMe') return !other && (n.memberIds || []).length > 1;
+      return !other; // 'mine': solo las mías
+    }
+    case 'unorg': {
+      const nf = !noteFolders(n).length; const nl = !noteLabels(n).length;
+      return r.what === 'folder' ? nf : r.what === 'label' ? nl : nf && nl;
+    }
+    case 'complete': return !!n.checks?.total && n.checks.done === n.checks.total;
+    case 'age': return (n.updated || n.created || 0) < now - Number(r.days) * 86400000;
+    case 'locked': return !!n.locked;
+    case 'template': return !!n.fromTemplate && (!r.ids?.length || r.ids.includes(n.fromTemplate));
+    default: return false;
+  }
+}
+
+// ¿La regla (o el conjunto) la saca de la pantalla principal?
+function hiddenByRules(n, c = rulesCtx()) {
+  if (!c.rules.length) return false;
+  if (c.cfg.keepPinned && n.pinned) return false;
+  const hit = c.cfg.combine === 'all' ? c.rules.every((r) => ruleMatch(r, n, c.now)) : c.rules.some((r) => ruleMatch(r, n, c.now));
+  return c.cfg.mode === 'show' ? !hit : hit;
+}
+
+// Notas que irían a la pantalla principal si no hubiera reglas
+const mainCandidates = () => state.notes.filter((n) => !n.trashed && !n.archived && !n.hidden && !n.template);
 
 function filterTitle(f = state.filter) {
   if (f.kind === 'archive') return 'Archivo';
@@ -425,6 +504,7 @@ function fillGrid(grid, notes) {
 function renderList() {
   const f = state.filter;
   const searching = state.search.active;
+  rulesMemo = null; // la antigüedad depende de la hora
   const visible = sortNotes(state.notes.filter((n) => (searching ? matchesSearch(n) : matchesFilter(n))));
   const usePinned = !searching && !['archive', 'trash', 'templates', 'reminders'].includes(f.kind);
   const pinned = usePinned ? visible.filter((n) => n.pinned) : [];
@@ -473,7 +553,10 @@ function renderList() {
     reminders: 'No hay recordatorios pendientes. Para crear uno, abrí una nota y tocá la campana.',
     templates: 'Todavía no hay plantillas. Creá una con el botón +, o desde una nota: menú ⋮ → «Guardar como plantilla».',
   };
-  $('#empty-text').textContent = searching ? 'No se encontraron notas' : (emptyTexts[f.kind] || emptyTexts.notes);
+  const byRules = !searching && f.kind === 'notes' && !visible.length && mainCandidates().some((n) => hiddenByRules(n));
+  $('#empty-text').textContent = searching ? 'No se encontraron notas'
+    : byRules ? 'Las reglas de ocultar/mostrar dejan sin notas la pantalla principal. Cambialas desde ⋮ Menú → «Ocultar/mostrar por reglas».'
+      : (emptyTexts[f.kind] || emptyTexts.notes);
   $('#empty').hidden = visible.length > 0;
 
   // La selección solo conserva notas visibles
@@ -2366,6 +2449,7 @@ function renderDrawer() {
     ${item('reminders', null, icon('bell'), `Recordatorios (${state.notes.filter((n) => !n.trashed && activeReminders(n.id).length).length})`)}
     ${item('templates', null, icon('template'), `Plantillas (${count((n) => n.template && !n.trashed)})`)}
     <div class="drawer-item"><button class="drawer-link ripple" id="drawer-hidden">${icon('visibilityOff')}<span class="drawer-label">Ocultas (${count((n) => n.hidden && !n.trashed && !n.template)})</span></button></div>
+    <div class="drawer-item"><button class="drawer-link ripple" id="drawer-rules">${icon('visibility')}<span class="drawer-label">Ocultar/mostrar por reglas${rulesLabel()}</span></button></div>
     ${item('archive', null, icon('archive'), `Archivo (${count((n) => n.archived && !n.trashed && !n.template)})`)}
     ${item('trash', null, icon('delete'), `Papelera (${count((n) => n.trashed)})`)}
     <div class="drawer-divider"></div>
@@ -2387,6 +2471,7 @@ function renderDrawer() {
   $('#drawer-invites')?.addEventListener('click', () => { closeOverlays(); showInvites(); });
   $('#drawer-new-label').addEventListener('click', () => newLabel());
   $('#drawer-hidden').addEventListener('click', () => { closeOverlays(); showHiddenManager(); });
+  $('#drawer-rules').addEventListener('click', () => { closeOverlays(); showRulesSettings(); });
   $('#drawer-settings').addEventListener('click', () => { closeOverlays(); showTrashSettings(); });
   $('#drawer-autotitle').addEventListener('click', () => { closeOverlays(); showAutoTitleSettings(); });
   $('#drawer-copymode').addEventListener('click', () => { closeOverlays(); showCopyModeSettings(); });
@@ -2744,7 +2829,7 @@ async function showNoteStats(noteId) {
   const people = (n.memberIds || []).map((uid) => n.members?.[uid]?.name || n.members?.[uid]?.email || (uid === state.user?.uid ? 'Vos' : 'Usuario'));
   const ownerName = n.owner ? (n.owner === state.user?.uid ? 'Vos' : (n.members?.[n.owner]?.name || n.members?.[n.owner]?.email || '—')) : 'Vos';
   const roleName = { owner: 'Dueño/a', edit: 'Puede editar', view: 'Solo puede ver' }[myRole(n)] || '—';
-  const flags = [n.pinned && 'Fijada', n.archived && 'Archivada', n.hidden && 'Oculta', n.locked && 'Bloqueada con huella', n.template && 'Plantilla'].filter(Boolean);
+  const flags = [n.pinned && 'Fijada', n.archived && 'Archivada', n.hidden && 'Oculta', !n.hidden && !n.archived && !n.trashed && !n.template && hiddenByRules(n) && 'Oculta por reglas en la pantalla principal', n.locked && 'Bloqueada con huella', n.template && 'Plantilla'].filter(Boolean);
   const rems = activeReminders(noteId);
   const next = nextOf(noteId);
   let bytes = 0;
@@ -2993,6 +3078,211 @@ function autoTitleFor(text) {
   return buildAutoTitle(st.autoTitleMode || 'phrase', st.autoTitlePrefix || '', text);
 }
 
+/* ---------- Ocultar/mostrar por reglas: panel ---------- */
+const SHARED_WHO = [
+  ['withMe', 'Las que me compartieron'], ['byMe', 'Las mías que compartí con otros'],
+  ['mine', 'Solo las mías (no las que me compartieron)'], ['owner', 'Las de un dueño en particular'],
+];
+const UNORG_WHAT = [['folder', 'Sin carpeta'], ['label', 'Sin etiqueta'], ['both', 'Sin carpeta ni etiqueta']];
+
+function rulesLabel() {
+  const cfg = rulesCfg();
+  const k = cfg.rules.filter(ruleActive).length;
+  if (!cfg.rules.length) return '';
+  if (!cfg.on) return ' (apagadas)';
+  return k ? ` (${k} activa${k > 1 ? 's' : ''})` : ' (sin efecto)';
+}
+
+// Dueños de las notas que me compartieron (para la regla "de un dueño en particular")
+function sharedOwners() {
+  const m = new Map();
+  state.notes.forEach((n) => {
+    if (n.owner && n.owner !== state.user?.uid && !m.has(n.owner)) m.set(n.owner, n.members?.[n.owner]?.name || n.members?.[n.owner]?.email || 'Usuario');
+  });
+  return [...m].sort((a, b) => a[1].localeCompare(b[1], 'es'));
+}
+
+function ruleText(r) {
+  const names = (arr) => arr.filter(Boolean).join(', ');
+  switch (r.type) {
+    case 'label': return `Etiqueta: ${names((r.ids || []).map((id) => labelById(id)?.name)) || '(borrada)'}`;
+    case 'folder': return `Carpeta: ${names((r.ids || []).filter((id) => folderById(id)).map(folderPath)) || '(borrada)'}${r.sub ? ' (con subcarpetas)' : ''}`;
+    case 'color': return `Color: ${names((r.colors || []).map((c) => COLORS.find(([k]) => k === c)?.[1]))}`;
+    case 'shared': return r.who === 'owner' ? `Compartidas por ${r.ownerName || 'un usuario'}` : (SHARED_WHO.find(([k]) => k === r.who)?.[1] || 'Compartidas');
+    case 'unorg': return UNORG_WHAT.find(([k]) => k === r.what)?.[1] || 'Sin organizar';
+    case 'complete': return 'Listas completas (todas las casillas tildadas)';
+    case 'age': return `Sin cambios hace más de ${plural(Number(r.days) || 0, 'día', 'días')}`;
+    case 'locked': return 'Bloqueadas con huella';
+    case 'template': return r.ids?.length
+      ? `Creadas desde la plantilla: ${names(r.ids.map((id) => { const t = noteById(id); return t ? (t.title || 'Sin título') : null; })) || '(borrada)'}`
+      : 'Creadas desde una plantilla (cualquiera)';
+    default: return 'Regla';
+  }
+}
+
+function showRulesSettings() {
+  const ui = { cfg: rulesCfg(), screen: 'main', idx: -1, draft: null };
+  const save = () => {
+    const c = ui.cfg;
+    const v = { on: !!c.on, mode: c.mode === 'show' ? 'show' : 'hide', combine: c.combine === 'all' ? 'all' : 'any', keepPinned: !!c.keepPinned, rules: c.rules };
+    state.repo.saveSettings({ hideRules: v });
+    state.org.settings.hideRules = v;
+    rulesMemo = null;
+    renderList(); renderDrawer();
+  };
+  const radio = (on) => `<span class="radio${on ? ' on' : ''}"></span>`;
+  const check = (on) => `<span class="checkbox ${on ? 'all' : 'none'}"></span>`;
+  const item = (attrs, mark, text, extra = '') => `<button class="picker-item ripple rl-wrap" ${attrs}>${mark}${extra}<span>${text}</span></button>`;
+  const typeIcon = (t) => icon(RULE_TYPES.find(([k]) => k === t)?.[2] || 'visibility');
+  const types = () => RULE_TYPES.filter(([k]) => k !== 'shared' || state.mode === 'cloud');
+
+  const mainHtml = () => {
+    const c = ui.cfg;
+    const cands = mainCandidates();
+    rulesMemo = null;
+    const tmp = rulesCtx(); // save() ya dejó ui.cfg en los ajustes
+    const hiddenN = cands.filter((n) => hiddenByRules(n, tmp)).length;
+    const rulesList = c.rules.map((r, i) => `<div class="rl-rule${ruleActive(r) ? '' : ' off'}">
+        <span class="rl-ico">${typeIcon(r.type)}</span><span class="rl-text">${esc(ruleText(r))}${ruleActive(r) ? '' : ' <small>(sin efecto)</small>'}</span>
+        <button class="icon-btn small ripple" data-edit="${i}" aria-label="Cambiar la regla">${icon('edit')}</button>
+        <button class="icon-btn small ripple" data-del="${i}" aria-label="Quitar la regla">${icon('delete')}</button>
+      </div>`).join('') || '<p class="sheet-text">Todavía no hay reglas.</p>';
+    return `<h2 class="sheet-title">Ocultar o mostrar por reglas</h2>
+      <p class="sheet-text">Se aplican solo a la pantalla principal de Notas: en carpetas, etiquetas, archivo, recordatorios, compartidas y búsqueda las notas siguen apareciendo. Valen en todos tus dispositivos.</p>
+      <button class="picker-item ripple at-switch" id="rl-on" role="switch" aria-checked="${c.on}"><span>Reglas activadas</span><span class="spacer"></span><span class="switch${c.on ? ' on' : ''}"></span></button>
+      <div class="at-opts${c.on ? '' : ' off'}">
+        <div class="rl-head">Qué hacer</div>
+        ${item('data-mode="hide"', radio(c.mode !== 'show'), 'Ocultar las que cumplan las reglas')}
+        ${item('data-mode="show"', radio(c.mode === 'show'), 'Mostrar solo las que cumplan las reglas')}
+        ${c.rules.length > 1 ? `<div class="rl-head">Con varias reglas</div>
+        ${item('data-combine="any"', radio(c.combine !== 'all'), 'Alcanza con que cumpla <strong>cualquiera</strong> de las reglas')}
+        ${item('data-combine="all"', radio(c.combine === 'all'), 'Tiene que cumplir <strong>todas</strong> las reglas a la vez')}` : ''}
+        ${item('id="rl-pinned"', check(c.keepPinned), 'Las fijadas se ven siempre, aunque cumplan (o no) las reglas')}
+        <div class="rl-head">Reglas</div>
+        ${rulesList}
+        <div class="sheet-actions"><button class="text-btn ripple" id="rl-add">${icon('add')}<span>Agregar regla</span></button></div>
+        <p class="sheet-text rl-result">${c.on && tmp.rules.length
+          ? `En la pantalla principal se ven <strong>${cands.length - hiddenN}</strong> de ${plural(cands.length, 'nota', 'notas')} (${hiddenN} oculta${hiddenN === 1 ? '' : 's'} por las reglas).`
+          : 'Ahora las reglas no ocultan ninguna nota.'}</p>
+      </div>
+      <div class="sheet-actions"><span class="spacer"></span><button class="filled-btn ripple" id="rl-ok">Listo</button></div>`;
+  };
+
+  const typesHtml = () => `<h2 class="sheet-title">Agregar regla</h2>
+    <p class="sheet-text">Elegí el criterio:</p>
+    <div class="picker-list">${types().map(([k, l, ic]) => `<button class="picker-item ripple" data-type="${k}">${icon(ic)}<span>${l}</span></button>`).join('')}</div>
+    <div class="sheet-actions"><span class="spacer"></span><button class="text-btn ripple" id="rl-back">Volver</button></div>`;
+
+  const editHtml = () => {
+    const d = ui.draft;
+    const title = RULE_TYPES.find(([k]) => k === d.type)?.[1] || 'Regla';
+    let inner = '';
+    if (d.type === 'label') {
+      const ls = [...state.org.labels].sort(byName);
+      inner = ls.length ? `<p class="sheet-text">Notas con alguna de estas etiquetas:</p><div class="picker-list">${ls.map((l) => item(`data-pick="${esc(l.id)}"`, check(d.ids.includes(l.id)), esc(l.name), `<i class="dot dot-lg" style="background:${esc(l.color || '#757575')}"></i>`)).join('')}</div>`
+        : '<p class="sheet-text">Todavía no hay etiquetas.</p>';
+    } else if (d.type === 'folder') {
+      const tree = folderTree();
+      inner = tree.length ? `<p class="sheet-text">Notas que están en alguna de estas carpetas:</p><div class="picker-list">${tree.map((fo) => `<button class="picker-item ripple" style="--depth:${fo.depth}" data-pick="${esc(fo.id)}">${check(d.ids.includes(fo.id))}${icon('folder')}<span>${esc(fo.name || 'Sin nombre')}</span></button>`).join('')}</div>
+        ${item('id="rl-sub"', check(d.sub), 'Incluir las subcarpetas')}`
+        : '<p class="sheet-text">Todavía no hay carpetas.</p>';
+    } else if (d.type === 'color') {
+      inner = `<p class="sheet-text">Notas de alguno de estos colores:</p><div class="picker-list">${COLORS.map(([k, l]) => item(`data-pick="${k}"`, check(d.colors.includes(k)), l, `<i class="dot dot-lg note-dot" data-color="${k}"></i>`)).join('')}</div>`;
+    } else if (d.type === 'shared') {
+      const owners = sharedOwners();
+      inner = SHARED_WHO.map(([k, l]) => item(`data-who="${k}"`, radio(d.who === k), l)).join('')
+        + (d.who === 'owner' ? (owners.length ? `<div class="rl-head">Dueño</div><div class="picker-list">${owners.map(([uid, name]) => item(`data-owner="${esc(uid)}"`, radio(d.owner === uid), esc(name))).join('')}</div>`
+          : '<p class="sheet-text">Nadie te compartió notas todavía.</p>') : '');
+    } else if (d.type === 'unorg') {
+      inner = UNORG_WHAT.map(([k, l]) => item(`data-what="${k}"`, radio(d.what === k), l)).join('');
+    } else if (d.type === 'age') {
+      inner = `<label class="field"><span>Notas sin cambios hace más de… (días)</span><input type="number" id="rl-days" min="1" step="1" inputmode="numeric" value="${esc(String(d.days || ''))}"></label>
+        <div class="hm-segs">${[7, 30, 90, 180, 365].map((k) => `<button class="chip ripple${Number(d.days) === k ? ' on' : ''}" data-days="${k}"><span>${k === 365 ? '1 año' : `${k} días`}</span></button>`).join('')}</div>`;
+    } else if (d.type === 'template') {
+      const ts = state.notes.filter((n) => n.template && !n.trashed);
+      inner = `<p class="sheet-text">Si no elegís ninguna, vale cualquier plantilla. Solo se reconocen las notas creadas desde una plantilla a partir de la v0.3.2.</p>
+        ${ts.length ? `<div class="picker-list">${ts.map((t) => item(`data-pick="${esc(t.id)}"`, check(d.ids.includes(t.id)), esc(t.title || 'Sin título'))).join('')}</div>` : '<p class="sheet-text">Todavía no hay plantillas.</p>'}`;
+    } else if (d.type === 'complete') {
+      inner = '<p class="sheet-text">Notas con casillas en las que todas están tildadas.</p>';
+    } else if (d.type === 'locked') {
+      inner = '<p class="sheet-text">Notas bloqueadas con huella.</p>';
+    }
+    return `<h2 class="sheet-title">${ui.idx >= 0 ? 'Cambiar regla' : 'Nueva regla'}: ${esc(title)}</h2>${inner}
+      <p class="sheet-text rl-result" id="rl-count">${editResult(d)}</p>
+      <div class="sheet-actions"><span class="spacer"></span><button class="text-btn ripple" id="rl-back">Cancelar</button><button class="filled-btn ripple" id="rl-save"${ruleActive(d) ? '' : ' disabled'}>Guardar</button></div>`;
+  };
+  // Cuántas notas de la pantalla principal cumplen la regla que se está armando
+  const editResult = (d) => {
+    if (!ruleActive(d)) return 'Elegí al menos una opción.';
+    const r = withSet(d); const now = Date.now();
+    const n = mainCandidates().filter((x) => ruleMatch(r, x, now)).length;
+    return `Cumplen esta regla: <strong>${plural(n, 'nota', 'notas')}</strong> de la pantalla principal.`;
+  };
+
+  const newDraft = (type) => ({
+    label: { type, ids: [] }, folder: { type, ids: [], sub: true }, color: { type, colors: [] },
+    shared: { type, who: 'withMe' }, unorg: { type, what: 'both' }, age: { type, days: 30 }, template: { type, ids: [] },
+  }[type] || { type });
+
+  const paint = (keepScroll = true) => {
+    const prev = $('#sheet').scrollTop;
+    const html = ui.screen === 'types' ? typesHtml() : ui.screen === 'edit' ? editHtml() : mainHtml();
+    openSheet(`<div class="rl-sheet">${html}</div>`, (body) => {
+      const on = (sel, fn) => body.querySelectorAll(sel).forEach((b) => b.addEventListener('click', () => fn(b)));
+      if (ui.screen === 'main') {
+        const c = ui.cfg;
+        on('#rl-on', () => { c.on = !c.on; save(); paint(); snackbar(c.on ? 'Reglas activadas' : 'Reglas apagadas: se ven todas las notas'); });
+        on('[data-mode]', (b) => { c.mode = b.dataset.mode; save(); paint(); });
+        on('[data-combine]', (b) => { c.combine = b.dataset.combine; save(); paint(); });
+        on('#rl-pinned', () => { c.keepPinned = !c.keepPinned; save(); paint(); });
+        on('#rl-add', () => { ui.screen = 'types'; paint(false); });
+        on('[data-edit]', (b) => { ui.idx = Number(b.dataset.edit); ui.draft = JSON.parse(JSON.stringify(c.rules[ui.idx])); ui.screen = 'edit'; paint(false); });
+        on('[data-del]', (b) => {
+          const i = Number(b.dataset.del); const removed = c.rules[i];
+          c.rules = c.rules.filter((_, j) => j !== i); save(); paint();
+          snackbar('Regla quitada', 'Deshacer', () => { c.rules = [...c.rules.slice(0, i), removed, ...c.rules.slice(i)]; save(); if ($('#sheet').classList.contains('open') && ui.screen === 'main') paint(); });
+        });
+        on('#rl-ok', closeOverlays);
+      } else if (ui.screen === 'types') {
+        on('[data-type]', (b) => { ui.idx = -1; ui.draft = newDraft(b.dataset.type); ui.screen = 'edit'; paint(false); });
+        on('#rl-back', () => { ui.screen = 'main'; paint(false); });
+      } else {
+        const d = ui.draft;
+        const listKey = d.type === 'color' ? 'colors' : 'ids';
+        on('[data-pick]', (b) => {
+          const v = b.dataset.pick; const arr = d[listKey];
+          d[listKey] = arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]; paint();
+        });
+        on('#rl-sub', () => { d.sub = !d.sub; paint(); });
+        on('[data-who]', (b) => { d.who = b.dataset.who; if (d.who !== 'owner') { delete d.owner; delete d.ownerName; } paint(); });
+        on('[data-owner]', (b) => { d.owner = b.dataset.owner; d.ownerName = sharedOwners().find(([u]) => u === d.owner)?.[1] || ''; paint(); });
+        on('[data-what]', (b) => { d.what = b.dataset.what; paint(); });
+        on('[data-days]', (b) => { d.days = Number(b.dataset.days); paint(); });
+        const days = body.querySelector('#rl-days');
+        // Sin redibujar mientras se escribe (no se pierde el toque en «Guardar» ni el teclado)
+        if (days) days.addEventListener('input', () => {
+          d.days = Math.max(0, Math.round(Number(days.value) || 0));
+          body.querySelector('#rl-count').innerHTML = editResult(d);
+          body.querySelector('#rl-save').disabled = !ruleActive(d);
+          body.querySelectorAll('[data-days]').forEach((x) => x.classList.toggle('on', Number(x.dataset.days) === d.days));
+        });
+        on('#rl-back', () => { ui.screen = ui.idx >= 0 ? 'main' : 'types'; paint(false); });
+        on('#rl-save', () => {
+          if (days) d.days = Math.max(0, Math.round(Number(days.value) || 0));
+          if (!ruleActive(d)) { paint(); return; }
+          const c = ui.cfg;
+          if (ui.idx >= 0) c.rules = c.rules.map((r, j) => (j === ui.idx ? d : r)); else c.rules = [...c.rules, d];
+          if (!c.on) c.on = true;
+          save(); ui.screen = 'main'; paint(false);
+          snackbar(ui.idx >= 0 ? 'Regla cambiada' : 'Regla agregada');
+        });
+      }
+    });
+    $('#sheet').scrollTop = keepScroll ? prev : 0;
+  };
+  paint(false);
+}
+
 function showAutoTitleSettings() {
   const st = state.org.settings;
   const cur = { on: !!st.autoTitleOn, mode: st.autoTitleMode || 'phrase', prefix: st.autoTitlePrefix ?? '' };
@@ -3061,7 +3351,7 @@ function matchesSearch(n) {
   const s = state.search;
   if (n.trashed || n.template) return false;
   if (n.archived && !s.archived) return false;
-  if (n.hidden && s.noHidden) return false;
+  if ((n.hidden || hiddenByRules(n)) && s.noHidden) return false; // también las ocultas por reglas
   if (s.folder && !(n.folders || []).includes(s.folder)) return false;
   if (s.label && !(n.labels || []).includes(s.label)) return false;
   if (s.color && (n.color || 'default') !== s.color) return false;
@@ -3240,7 +3530,7 @@ function reorder(id, targetId, before, ids) {
 /* ---------- Plantillas ---------- */
 async function useTemplate(id) {
   const f = state.filter;
-  const meta = f.kind === 'folder' ? { folders: [f.id] } : f.kind === 'label' ? { labels: [f.id] } : {};
+  const meta = { ...(f.kind === 'folder' ? { folders: [f.id] } : f.kind === 'label' ? { labels: [f.id] } : {}), fromTemplate: id };
   const created = await copyNotes([id], { fromTemplate: true, meta, quiet: true });
   if (!created?.length) return;
   if (f.kind === 'templates' || f.kind === 'archive' || f.kind === 'trash') state.filter = { kind: 'notes' };

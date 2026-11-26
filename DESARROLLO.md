@@ -16,15 +16,16 @@
 | URL publicada | https://luchorcompartidos.github.io/notas/ |
 | Tipo | Web + Android (Capacitor, un solo código) |
 | Estado | En uso |
-| Última versión (Release) | v0.3.1 — 2026-11-26 |
+| Última versión (Release) | v0.3.2 — 2026-11-26 |
 | Se conecta con | Firebase, proyecto **notas-pro-2026** (plan gratuito Spark; Firestore en modo producción) |
 | Dispositivos viejos (Android 5/6) | **Sí, hecho**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio y, al cerrar cada etapa, revisar si lo hecho deja algo nuevo para esa guía (un problema, un arreglo, una versión de biblioteca, una prueba en las tablets) y, si corresponde, actualizarla (sección del tema + Historial) y subirla al repo home. Partes 1 (v0.2.1), 2 (v0.2.2) y 3 (v0.2.6) cerradas: un solo APK anda en el celular, la tablet Android 6.0.1 y la Bangho (Android 5.0) |
 
 ## 2. Etapa actual
-**Inicio de sesión con correo y contraseña propia de ANote: hecho** (Paso A en v0.3.0, Minor: web y lógica compartida; Paso B en v0.3.1, Patch: ajustes para el APK). Falta que el usuario **pegue las reglas nuevas** en Firebase y lo pruebe (sección 3). Próxima etapa: ocultar/mostrar notas por criterios (Releases Patch).
+**Ocultar/mostrar notas por reglas: Etapa 1 hecha (v0.3.2, Patch)**: todos los criterios, los dos modos, cómo se combinan varias reglas, la excepción de las fijadas y el interruptor dentro del panel. Falta la prueba del usuario (sección 3). **Próxima: Etapa 2** (aviso en la pantalla principal «N notas ocultas por reglas · Mostrar» con interruptor rápido, y vistas con nombre), Release Patch.
+- Inicio de sesión con correo y contraseña propia (v0.3.0 Minor y v0.3.1 Patch): hecho; falta que el usuario **pegue las reglas nuevas** en Firebase y lo pruebe (sección 3).
 - App Links (v0.2.8): hecho; falta la prueba del usuario (sección 3).
 - La selección de celdas (v0.2.7) la probó el usuario el 2026-11-26 y anda bien dentro del alcance de su prueba; si aparece algo con el uso, lo reporta.
-- Dispositivos viejos: Partes 1, 2 y 3 cerradas (v0.2.6 probada con éxito en la Bangho con Android 5.0). El inicio con correo no suma nada nativo (no cambia el mínimo de Android 5.0).
+- Dispositivos viejos: Partes 1, 2 y 3 cerradas (v0.2.6 probada con éxito en la Bangho con Android 5.0). El inicio con correo no suma nada nativo (no cambia el mínimo de Android 5.0). Ocultar/mostrar por reglas tampoco: solo JS y CSS que ya andan en Chromium 94.
 
 ## 3. Próximos pasos
 1. **El usuario pega las reglas nuevas** (`firestore.rules`, cambiaron en la v0.3.0) en Firebase → Firestore Database → Reglas → Publicar. Sin eso, «Desvincular Google» y «Volver a usar Google» dan «El servidor rechazó el cambio».
@@ -35,13 +36,14 @@
    - Con la cuenta de Google: ⋮ Menú → «Seguridad de la cuenta» → «Pasar a contraseña propia» (correo distinto del Gmail) → verificar → «Desvincular Google». Comprobar que las notas siguen, que otro dispositivo con la sesión de Google abierta la cierra al abrir ANote, y que «Continuar con Google» con ese Gmail entra a una cuenta vacía. Después, «Volver a usar Google».
    - Al entrar con Google, el aviso de la Verificación en 2 Pasos, con «No volver a mostrar».
    - **A confirmar en la prueba:** que, al agregar la contraseña con otro correo, Firebase cambie el correo de la cuenta al nuevo (el código cubre los dos casos: si no lo cambia, manda «verificar antes de cambiar el correo»; ver sección 6).
-3. **Implementar ocultar/mostrar notas por criterios** (Releases Patch), según la sección 4. Se puede partir en etapas (por ejemplo: reglas y modos; aviso e interruptor; vistas con nombre).
-4. **El usuario prueba App Links (v0.2.8):** actualizar el APK, mandarse por WhatsApp el link de una nota («Copiar (o Enviar) Link») y tocarlo: tiene que abrir la nota en ANote. Probar también con una nota sin acceso (tiene que salir «Solicitar acceso»). Si en el celular abre el navegador: Información de la app → Abrir de forma predeterminada → Agregar vínculo → tildar `luchorcompartidos.github.io`. En Android 5 sale «Abrir con…» (normal).
-5. Corregir lo que el usuario reporte de la selección de celdas con el uso.
-6. Confirmar en la Bangho (Android 5.0), si no se probó todavía: inicio de sesión con Google, sincronización, recordatorios y exportar PDF (Play services de Android 5 no se actualiza desde 2024).
-7. Pruebas pendientes en el celular y en la tablet Android 6: inicio de sesión con Google, exportar/enviar PDF o docx, escribir arriba/debajo de una tabla, recordatorios, sincronización.
-8. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx; arrastrar con el dedo para seleccionar un rango.
-9. Cuenta, más adelante (si se pide): cambiar la contraseña desde la app (hoy: «Olvidé mi contraseña»); personalizar en la consola de Firebase el texto de los correos (Authentication → Plantillas).
+3. **El usuario prueba ocultar/mostrar por reglas (v0.3.2)**, en la web y en el APK (también en una tablet vieja): ⋮ Menú → «Ocultar/mostrar por reglas» → «Agregar regla» con cada criterio (el panel dice cuántas notas cumplen); probar «Ocultar…» y «Mostrar solo…», «cualquiera»/«todas» con dos reglas, «Las fijadas se ven siempre», el interruptor «Reglas activadas», quitar una regla y «Deshacer». Comprobar que en carpetas, etiquetas y búsqueda las notas siguen apareciendo, que «Excluir ocultas» de la búsqueda también las saca y que en otro dispositivo se aplican las mismas reglas. La regla «Creadas desde una plantilla» solo reconoce notas creadas con «Usar esta plantilla» desde la v0.3.2.
+4. **Etapa 2 de ocultar/mostrar** (Release Patch): aviso en la pantalla principal («12 notas ocultas por reglas · Mostrar», para verlas un rato sin tocar las reglas) con interruptor rápido para apagarlas, y vistas con nombre («Trabajo», «Hogar») para cambiar desde el menú. Ver sección 4 y sección 6 («Ocultar/mostrar por reglas»).
+5. **El usuario prueba App Links (v0.2.8):** actualizar el APK, mandarse por WhatsApp el link de una nota («Copiar (o Enviar) Link») y tocarlo: tiene que abrir la nota en ANote. Probar también con una nota sin acceso (tiene que salir «Solicitar acceso»). Si en el celular abre el navegador: Información de la app → Abrir de forma predeterminada → Agregar vínculo → tildar `luchorcompartidos.github.io`. En Android 5 sale «Abrir con…» (normal).
+6. Corregir lo que el usuario reporte de la selección de celdas con el uso.
+7. Confirmar en la Bangho (Android 5.0), si no se probó todavía: inicio de sesión con Google, sincronización, recordatorios y exportar PDF (Play services de Android 5 no se actualiza desde 2024).
+8. Pruebas pendientes en el celular y en la tablet Android 6: inicio de sesión con Google, exportar/enviar PDF o docx, escribir arriba/debajo de una tabla, recordatorios, sincronización.
+9. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx; arrastrar con el dedo para seleccionar un rango.
+10. Cuenta, más adelante (si se pide): cambiar la contraseña desde la app (hoy: «Olvidé mi contraseña»); personalizar en la consola de Firebase el texto de los correos (Authentication → Plantillas).
 
 ## 4. Decisiones tomadas
 - **Un solo código** para la web y Android (Capacitor), con el aspecto lo más parecido posible en las dos, que en Android se sienta nativa. Backend gratis (Firebase Spark) y hosting en GitHub.
@@ -101,14 +103,22 @@
   - **Aviso** en la pantalla principal («12 notas ocultas por reglas · Mostrar») para verlas un rato sin tocar las reglas, e **interruptor** para apagar todas las reglas de una vez.
   - **Vistas con nombre:** guardar combinaciones («Trabajo», «Hogar») y cambiar entre ellas desde el menú.
   - **Búsqueda:** las encuentra; el filtro «Excluir ocultas» también excluye las ocultas por reglas.
-  - A proponer en la implementación: cómo se combinan varias reglas (cualquiera / todas).
+  - **Etapas:** Etapa 1 (v0.3.2): criterios, modos, combinación, fijadas e interruptor dentro del panel. Etapa 2: aviso en la pantalla principal con interruptor rápido y vistas con nombre.
+  - **Varias reglas** (resuelto en v0.3.2): se elige «cualquiera» (por defecto) o «todas a la vez». La opción aparece con dos reglas o más.
+  - **Fijadas:** «Las fijadas se ven siempre» viene activada por defecto y vale en los dos modos.
+  - **Criterio «plantillas»:** como las plantillas nunca están en la pantalla principal, el criterio es «creadas desde una plantilla» (cualquiera o las elegidas). Se marca con `fromTemplate` (id de la plantilla) al usar «Usar esta plantilla» desde la v0.3.2; las notas anteriores no se reconocen.
+  - **Compartidas:** «las que me compartieron», «las mías que compartí con otros» (más de un miembro), «solo las mías» y «de un dueño en particular» (elegido entre los dueños de las notas que me compartieron). Sin cuenta (modo local) no aparece.
+  - **Sin organizar:** «sin carpeta», «sin etiqueta» o «sin carpeta ni etiqueta» (las carpetas o etiquetas borradas no cuentan).
+  - **Antigüedad:** según la fecha del último cambio (`updated`); atajos de 7, 30, 90, 180 días y 1 año.
+  - Las notas ocultas por reglas **no** llevan la marca «[Oculta]» en las otras vistas (en el modo «Mostrar solo…» la tendrían casi todas). En «Estadísticas e Info de la nota» figura «Oculta por reglas en la pantalla principal».
+  - Una regla que quedó sin efecto (por ejemplo, su etiqueta se borró) se muestra atenuada con «(sin efecto)» y no cuenta.
 - **Versiones:** cada pedido define el tipo de Release (la mayoría Patch; la v0.1.0 y la v0.2.0 fueron Minor; las tablas Parte A y B1 fueron Patch por elección del usuario). Si hay otras preguntas pendientes, el tipo de Release se pregunta al final; si no, se avanza con Patch y se avisa el número.
 
 ## 5. Pendientes / dudas abiertas
 - [x] **APK para dispositivos viejos:** Partes 1 (v0.2.1), 2 (v0.2.2) y 3 (v0.2.6) hechas. Un solo APK con mínimo Android 5.0; probado en la Bangho (Android 5.0) y la tablet Android 6.0.1.
 - [x] **Selección de celdas (v0.2.7):** probada por el usuario el 2026-11-26, sin errores dentro del alcance de su prueba.
 - [x] **Inicio de sesión con correo y contraseña (v0.3.0 y v0.3.1):** hecho; falta que el usuario pegue las reglas y lo pruebe (sección 3).
-- [ ] **Ocultar/mostrar notas por criterios:** definido, falta implementar (secciones 3 y 4).
+- [ ] **Ocultar/mostrar notas por criterios:** Etapa 1 hecha (v0.3.2), falta la prueba del usuario; Etapa 2 (aviso con interruptor y vistas con nombre) por hacer (secciones 3 y 4).
 - [ ] **Pantalla de administración de usuarios** (otra etapa, sin definir en detalle): visible solo para el dueño de la app, para gestionar de forma **forzada** acciones que el usuario no puede hacer por sí mismo (por falta de acceso o por urgencia). Ideas ya conversadas: listado de usuarios (ANote lo arma al entrar cada uno: nombre, correo, último ingreso; Firebase no deja listar usuarios desde la app), elegir uno, varios o todos y **cerrarles la sesión** en todos sus dispositivos, y **marcarlos para que se les pida pasar a contraseña propia** (sugerido u obligatorio). Que el próximo inicio con Google muestre siempre el selector de cuentas (Google no permite que una app obligue a pedir la contraseña). Es un cierre hecho por la app (no un bloqueo estricto); para bloquear de verdad, **desactivar** el usuario en la consola de Firebase (no borrarlo: al volver a entrar tendría otro uid y perdería sus notas). Requiere cambio de reglas.
 - [x] **App Links** (v0.2.8): hecho; falta la prueba del usuario (sección 3).
 - **Limitaciones conocidas:**
@@ -166,6 +176,13 @@ Vite 6 (target es2022, `base: './'`) + Capacitor 7. Todo el código de la app es
 - **Teclado (PC):** Escape, Supr/Retroceso, Ctrl + A/C/X/B/I/U; Ctrl + V usa el evento `paste` (trae el texto sin pedir permiso) y, si no llega en 250 ms, lee el portapapeles.
 - HTML: `#sel-bar` (misma posición que `#table-bar`) y `#sel-actions` (misma posición que `#toolbar`) en `index.html`; botón `data-tbl="select"` en `#table-bar`.
 
+**Ocultar/mostrar por reglas** (v0.3.2, `main.js`, bloques "Ocultar/mostrar por reglas" y "…: panel"):
+- Se guarda en `settings/prefs.hideRules` = `{ on, mode: 'hide'|'show', combine: 'any'|'all', keepPinned, rules: [] }`. **Siempre se escribe el objeto entero** (`saveSettings` usa `merge: true`: un mapa se fusiona, pero el arreglo `rules` se reemplaza). Sin cambio de reglas de Firestore.
+- Reglas (`type` y campos): `label {ids}`, `folder {ids, sub}`, `color {colors}`, `shared {who: withMe|byMe|mine|owner, owner, ownerName}`, `unorg {what: folder|label|both}`, `complete`, `age {days}`, `locked`, `template {ids}` (vacío = cualquiera; mira `meta.fromTemplate`, que pone `useTemplate`).
+- Lógica: `rulesCfg`, `ruleActive` (la regla tiene efecto), `withSet` (carpeta + subcarpetas en un `Set`), `rulesCtx` (memo `rulesMemo`; se borra en cada `renderList` y al guardar), `ruleMatch`, `hiddenByRules(n)` (fijadas primero; `mode === 'show'` invierte) y `mainCandidates`. Se aplica en `matchesFilter` (caso por defecto = pantalla principal) y en `matchesSearch` con `noHidden`. Si las reglas dejan la pantalla principal vacía, `#empty-text` lo explica.
+- Panel: `showRulesSettings` (pantallas `main` / `types` / `edit` en un objeto `ui`, redibujadas con `openSheet` dentro de `.rl-sheet`), `ruleText`, `rulesLabel` (texto del menú lateral: activas, apagadas o sin efecto), `sharedOwners`. El campo de días no redibuja mientras se escribe (para no perder el toque en «Guardar»). CSS `.rl-*` y `.note-dot` al final de `styles.css`, antes del bloque de WebView viejas (nada nuevo: sirve en Chromium 94).
+- **Para la Etapa 2:** el número de ocultas por reglas es `mainCandidates().filter((n) => hiddenByRules(n)).length`; el aviso puede ir en `#view-note` (hoy se usa para búsqueda, papelera, plantillas y orden manual) y "Mostrar un rato" puede ser una variable de estado (no guardada) que `hiddenByRules` mire antes que nada. Las vistas con nombre pueden guardarse como `settings/prefs.hideViews: [{ id, name, cfg }]` y la vista activa en `hideRules`.
+
 **Cuenta: correo y contraseña** (v0.3.0 y v0.3.1):
 - Proveedor "Correo electrónico/contraseña" de Firebase Auth (habilitado por el usuario el 2026-11-26). `auth.languageCode = 'es'`. Los correos llevan `url: https://luchorcompartidos.github.io/notas/` («Continuar» vuelve a ANote; en el APK lo abre por App Links); si Firebase rechaza ese dominio (`unauthorized-continue-uri`), se reintenta sin él (`withAction`).
 - **Correo de ANote = el del proveedor `password`** (`passwordEmail`), y está verificado solo si coincide con `user.email` y `emailVerified` (`passwordVerified`). Al vincular con otro correo, Firebase cambia `user.email` al nuevo; si no lo hiciera, `linkPassword` llama a `verifyBeforeUpdateEmail`. Las reglas miran `email_verified` del token: después de verificar se hace `reload` + `getIdToken(true)` (`refreshUser`) y se recarga la página (`onVerified`) para que se escuchen las invitaciones.
@@ -195,8 +212,8 @@ Vite 6 (target es2022, `base: './'`) + Capacitor 7. Todo el código de la app es
   - `notes/{id}/updates/*`: bytes de Yjs.
   - `notes/{id}/images/*`: imágenes.
   - `notes/{id}/versions/*`: historial, una versión cada 10 minutos como máximo y las últimas 30.
-- `users/{uid}/meta/{noteId}`: organización personal. Campos: `color`, `pinned`, `archived`, `trashed`, `trashedAt`, `folders[]`, `labels[]`, `order`, `locked`, `template`, `hidden`, `unlisted`.
-- `users/{uid}/folders`, `labels`, `settings/prefs` (`sort`, `trashDays`, título automático, `cellCopyMode`) y `reminders`.
+- `users/{uid}/meta/{noteId}`: organización personal. Campos: `color`, `pinned`, `archived`, `trashed`, `trashedAt`, `folders[]`, `labels[]`, `order`, `locked`, `template`, `hidden`, `unlisted` y `fromTemplate` (v0.3.2: id de la plantilla de la que salió).
+- `users/{uid}/folders`, `labels`, `settings/prefs` (`sort`, `trashDays`, título automático, `cellCopyMode`, `secTipOff`, `hideRules`) y `reminders`.
 - `invites/{noteId}_{email}` y `accessRequests/{noteId}_{uid}`.
 - `security/{uid}` (v0.3.0): `passwordOnly` (bool) y `at`. Lo lee el propio usuario; se escribe o se borra solo con sesión de contraseña de menos de 10 minutos (`auth_time`).
 - **Reglas:** `firestore.rules`. **Cada vez que cambian, el usuario tiene que pegarlas en la consola de Firebase** (Firestore Database → Reglas → Publicar). La última vez que cambiaron fue en la **v0.3.0** (`blockedGoogle` dentro de `signedIn()`, `emailOk()` para invitaciones y `security/{uid}`). Antes, en la v0.1.0 (`accessRequests`). `blockedGoogle` hace un `exists`/`get` de `security/{uid}` en los pedidos con sesión de Google (una lectura más por pedido, poca cosa en el plan gratuito). Lo que se guarda en `users/{uid}/**` no necesita cambios de reglas. Las tablas no cambiaron reglas.
@@ -263,3 +280,4 @@ La tabla completa de versiones está en el `README.md`.
 | v0.2.8 (2026-11-26) | App Links: el link de una nota abre la app (repo nuevo `luchorcompartidos.github.io` con `assetlinks.json`) |
 | v0.3.0 (2026-11-26) | Inicio de sesión con correo y contraseña propia de ANote (Paso A, Minor): entrar, crear cuenta con verificación del correo, olvidé mi contraseña; «Seguridad de la cuenta» con aviso de Verificación en 2 Pasos de Google, pasar a contraseña propia y volver a Google, nombre visible. Reglas nuevas (correo verificado para invitaciones, bloqueo de sesiones de Google con `security/{uid}`) |
 | v0.3.1 (2026-11-26) | Correo y contraseña, Paso B (APK): el panel queda arriba del teclado y centra el campo; al volver a la app (o al tocar «Continuar» del correo) se comprueba sola la verificación |
+| v0.3.2 (2026-11-26) | Ocultar/mostrar por reglas, Etapa 1: panel en el menú lateral con todos los criterios, «Ocultar…» o «Mostrar solo…», cualquiera/todas, fijadas siempre visibles, interruptor; «Excluir ocultas» también saca las ocultas por reglas; marca `fromTemplate` al usar una plantilla |
