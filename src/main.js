@@ -8,7 +8,7 @@ import {
   tableSizes, setColumnWidth, setColumnsMode, setRowHeight, setRowsMode,
   copyTablePart, insertCopied, duplicateTablePart, getTableClip, CELL_BG, sortTable, placeCursorAt,
   needsTrailingParagraph, writeAtEnd, needsLeadingParagraph, writeAtStart,
-  selState, cellAtDom, startSelection, endSelection, updateSelection, selectionInfo, selApplyAttrs, selCommonAttrs,
+  selState, cellAtDom, startSelection, endSelection, updateSelection, dragSelection, selectionInfo, selApplyAttrs, selCommonAttrs,
   selToggleMark, selClear, selCopy, selPaste, selDeleteLines, getCellClip,
 } from './editor.js';
 import { colName, listText } from './seleccion.js';
@@ -1166,7 +1166,7 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
     </div>
     <div class="tbl-group"><h3>Encabezado</h3><div class="chips-row">${act('headerRow', `${ctx.headerRow ? '✓ ' : ''}Fila de encabezado`, ctx.headerRow ? ' chip-on' : '')}${act('headerCol', `${ctx.headerCol ? '✓ ' : ''}Columna de encabezado`, ctx.headerCol ? ' chip-on' : '')}</div></div>
     <div class="tbl-group"><h3>Tabla</h3><div class="chips-row">${act('textBefore', 'Escribir arriba de la tabla')}${act('textAfter', 'Escribir debajo de la tabla')}${act('duplicate', 'Duplicar tabla')}${act('deleteTable', 'Eliminar tabla', ' danger')}</div></div>
-    <p class="sheet-text tbl-tip">Con teclado: Tab pasa a la celda siguiente y, en la última, agrega una fila. Podés pegar celdas copiadas de Excel o Google Sheets y se arma la tabla. Dentro de una celda podés usar casillas, listas y formato. En la PC, el ancho de una columna también se cambia arrastrando su borde. En el celular, mantené apretada una celda para ver su menú (en la PC, clic derecho; Shift + clic derecho abre el menú del navegador). Para elegir varias celdas sueltas, filas o columnas: «Seleccionar» (en la PC también Ctrl + clic).</p>
+    <p class="sheet-text tbl-tip">Con teclado: Tab pasa a la celda siguiente y, en la última, agrega una fila. Podés pegar celdas copiadas de Excel o Google Sheets y se arma la tabla. Dentro de una celda podés usar casillas, listas y formato. En la PC, el ancho de una columna también se cambia arrastrando su borde. En el celular, mantené apretada una celda para ver su menú (en la PC, clic derecho; Shift + clic derecho abre el menú del navegador). Para elegir varias celdas sueltas, filas o columnas: «Seleccionar» (en la PC también Ctrl + clic); ahí, para un rango, apoyá el dedo un instante en una celda y arrastrá (con el mouse, apretá y arrastrá).</p>
   `, (body) => {
     // Al volver a dibujar el panel se mantiene el desplazamiento (si no, salta arriba en cada toque).
     const reopen = () => {
@@ -1374,9 +1374,9 @@ function beginSelection(hit = null) {
   try { window.getSelection()?.removeAllRanges(); } catch { /* nada */ }
   hideKeyboard();
   haptic();
-  if (!localStorage.getItem('notas-sel-ayuda')) {
-    localStorage.setItem('notas-sel-ayuda', '1');
-    snackbar('Tocá celdas para sumarlas o quitarlas. Las letras y los números seleccionan columnas y filas enteras.');
+  if (!localStorage.getItem('notas-sel-ayuda2')) {
+    localStorage.setItem('notas-sel-ayuda2', '1');
+    snackbar('Tocá celdas para sumarlas o quitarlas, o apoyá el dedo un instante en una celda y arrastrá para elegir un rango. Las letras y los números seleccionan columnas y filas enteras.');
   }
 }
 function finishSelection() {
@@ -1674,6 +1674,115 @@ function bindSelection() {
     selUi.range = false;
     updateSelection(editor, op, hit);
   }, true);
+  // Arrastrar para seleccionar un rango (v0.3.6).
+  // Dedo: apoyarlo en una celda ~0,3 s sin moverlo y arrastrar; si se desliza enseguida, se desplaza la nota como
+  // siempre, y si se deja quieto ~0,5 s se abre el menú (bindCellPress). Mouse: apretar y arrastrar, sin esperar.
+  // El rectángulo se suma a lo que ya estaba seleccionado. Cerca del borde, la nota (y la tabla de costado) se desplaza sola.
+  const DRAG_HOLD = 300;
+  let drag = null;  // { from, base, last, x, y, active, timer, armedAt, mouse }
+  const dragEnd = () => {
+    if (!drag) return;
+    clearTimeout(drag.timer); cancelAnimationFrame(drag.raf || 0);
+    drag = null;
+  };
+  const dragTo = (x, y) => {
+    drag.x = x; drag.y = y;
+    const el = document.elementFromPoint(x, y)?.closest?.('td, th');
+    const hit = el ? cellAtDom(editor, el) : null;
+    if (!hit || hit.tablePos !== drag.from.tablePos) return;
+    if (drag.last && drag.last.r === hit.r && drag.last.c === hit.c) return;
+    drag.last = hit;
+    dragSelection(editor, drag.base, drag.from, hit);
+  };
+  // Desplazamiento automático cerca de los bordes de la nota y de la tabla.
+  const dragScroll = () => {
+    if (!drag?.active) return;
+    const sc = $('#editor-scroll').getBoundingClientRect();
+    let bottom = sc.bottom;
+    for (const id of ['#sel-bar', '#sel-actions']) { const b = $(id); if (b && !b.hidden) bottom = Math.min(bottom, b.getBoundingClientRect().top); }
+    const E = 48; let dy = 0; let dx = 0;
+    if (drag.y > bottom - E) dy = Math.min(E, drag.y - (bottom - E)) / 3;
+    else if (drag.y < sc.top + E) dy = -Math.min(E, sc.top + E - drag.y) / 3;
+    const wrap = document.elementFromPoint(drag.x, drag.y)?.closest?.('.tableWrapper')
+      || $('#editor .tbl-selecting');
+    if (wrap && wrap.scrollWidth > wrap.clientWidth) {
+      const w = wrap.getBoundingClientRect();
+      if (drag.x > w.right - E) dx = Math.min(E, drag.x - (w.right - E)) / 3;
+      else if (drag.x < w.left + E) dx = -Math.min(E, w.left + E - drag.x) / 3;
+      if (dx) wrap.scrollLeft += dx;
+    }
+    if (dy) $('#editor-scroll').scrollTop += dy;
+    if (dx || dy) dragTo(drag.x, drag.y);
+    drag.raf = requestAnimationFrame(dragScroll);
+  };
+  const dragStart = (cellEl, x, y, mouse) => {
+    const from = cellAtDom(editor, cellEl);
+    const s = selState(editor);
+    if (!from || !s) return;
+    // Si la celda es de otra tabla, la selección empieza de nuevo en esa tabla.
+    const base = from.tablePos === s.tablePos ? new Set(s.cells) : new Set();
+    drag = { from, base, last: null, x, y, active: false, timer: null, mouse };
+  };
+  const dragActivate = () => {
+    if (!drag || drag.active) return;
+    drag.active = true; tap = null;
+    const s = selState(editor);
+    if (!s || drag.from.tablePos !== s.tablePos) { startSelection(editor, drag.from); drag.base = new Set(); }
+    drag.last = null;
+    dragTo(drag.x, drag.y);
+    haptic();
+    drag.raf = requestAnimationFrame(dragScroll);
+  };
+  host.addEventListener('touchstart', (e) => {
+    dragEnd();
+    if (!isSelecting() || e.touches.length !== 1) return;
+    const cellEl = e.target.closest?.('td, th');
+    if (!cellEl) return;
+    const t = e.touches[0];
+    dragStart(cellEl, t.clientX, t.clientY, false);
+    if (!drag) return;
+    drag.sx = t.clientX; drag.sy = t.clientY;
+    drag.timer = setTimeout(() => { if (drag) drag.armedAt = Date.now(); }, DRAG_HOLD);
+  }, { passive: true });
+  // No pasivo: con el dedo "armado", el movimiento selecciona en vez de desplazar (preventDefault).
+  host.addEventListener('touchmove', (e) => {
+    if (!drag || e.touches.length !== 1) { if (drag && !drag.active) dragEnd(); return; }
+    const t = e.touches[0];
+    const moved = Math.abs(t.clientX - drag.sx) > 10 || Math.abs(t.clientY - drag.sy) > 10;  // igual que bindCellPress
+    if (!drag.active) {
+      if (!moved) return;
+      // Se movió antes de tiempo (desplazamiento normal) o ya se abrió el menú de mantener apretado.
+      if (!drag.armedAt || cellMenuAt >= drag.armedAt) { dragEnd(); return; }
+      drag.x = t.clientX; drag.y = t.clientY;
+      dragActivate();
+    }
+    if (e.cancelable) e.preventDefault();
+    dragTo(t.clientX, t.clientY);
+  }, { passive: false });
+  host.addEventListener('touchend', () => dragEnd());
+  host.addEventListener('touchcancel', () => dragEnd());
+  // Mouse (PC): apretar en una celda y mover a otra.
+  // En captura, como el pointerdown de arriba (que corta la propagación hacia la celda).
+  host.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'mouse' || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || !isSelecting()) return;
+    const cellEl = e.target.closest?.('td, th');
+    if (cellEl) { dragEnd(); dragStart(cellEl, e.clientX, e.clientY, true); }
+  }, true);
+  window.addEventListener('pointermove', (e) => {
+    if (!drag?.mouse) return;
+    if (!(e.buttons & 1)) { dragEnd(); return; }
+    if (!drag.active) {
+      const el = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('td, th');
+      const hit = el ? cellAtDom(editor, el) : null;
+      if (!hit || (hit.r === drag.from.r && hit.c === drag.from.c && hit.tablePos === drag.from.tablePos)) return;
+      drag.x = e.clientX; drag.y = e.clientY;
+      dragActivate();
+      return;
+    }
+    dragTo(e.clientX, e.clientY);
+  });
+  window.addEventListener('pointerup', () => { if (drag?.mouse) { if (drag.active) tap = null; dragEnd(); } });
+
   // Por las dudas: si el editor recibe el foco mientras se selecciona, se lo saca (así no se abre el teclado).
   host.addEventListener('focusin', () => {
     if (!isSelecting()) return;
@@ -1710,7 +1819,7 @@ function bindSelection() {
         case 'range':
           selUi.range = !selUi.range;
           b.classList.toggle('on', selUi.range);
-          if (selUi.range) snackbar(s.anchor ? `Tocá otra celda: se selecciona el rectángulo desde ${colName(s.anchor.c)}${s.anchor.r + 1}` : 'Tocá dos celdas: se selecciona el rectángulo entre ellas');
+          if (selUi.range) snackbar(s.anchor ? `Tocá otra celda: se selecciona el rectángulo desde ${colName(s.anchor.c)}${s.anchor.r + 1}` : 'Tocá dos celdas: se selecciona el rectángulo entre ellas (también: apoyá el dedo en una celda y arrastrá)');
           break;
         case 'all': case 'invert': case 'none': updateSelection(editor, cmd); break;
         case 'copy': selDoCopy(); break;

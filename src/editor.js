@@ -785,6 +785,15 @@ export function updateSelection(editor, op, hit = null) {
   return true;
 }
 
+// Arrastre (v0.3.6): la selección que había al empezar (base) más el rectángulo desde la celda inicial
+// hasta la que está debajo del dedo o del mouse. Se recalcula en cada movimiento (achicar el rectángulo también sirve).
+export function dragSelection(editor, base, from, to) {
+  const s = selState(editor);
+  if (!s || !to || to.tablePos !== s.tablePos) return false;
+  setSel(editor, { tablePos: s.tablePos, cells: Sel.addRange(new Set(base), from, to), anchor: { r: to.r, c: to.c } });
+  return true;
+}
+
 // Resumen para la barra y el menú: cuántas celdas, filas y columnas completas, y las que toca.
 export function selectionInfo(editor) {
   const s = selState(editor);
