@@ -21,17 +21,20 @@
 | Dispositivos viejos (Android 5/6) | **Sí, hecho**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio. Partes 1 (v0.2.1), 2 (v0.2.2) y 3 (v0.2.6) cerradas: un solo APK anda en el celular, la tablet Android 6.0.1 y la Bangho (Android 5.0) |
 
 ## 2. Etapa actual
-**App Links (v0.2.8): falta que el usuario lo pruebe en el celular y las tablets** (sección 3, paso 1).
+**Próxima etapa definida (2026-11-26): inicio de sesión con correo y contraseña propia de ANote, Release Minor (v0.3.0).** Falta implementarla (definiciones en la sección 4, "Inicio de sesión con correo y contraseña"). Después: ocultar/mostrar notas por criterios, con Releases Patch.
+- App Links (v0.2.8): hecho; falta la prueba del usuario (sección 3).
 - La selección de celdas (v0.2.7) la probó el usuario el 2026-11-26 y anda bien dentro del alcance de su prueba; si aparece algo con el uso, lo reporta.
-- Último trabajo: selección de celdas sueltas, filas y columnas, con copiar/cortar (bloque o lista), pegar, formato y eliminar (detalle en las secciones 4 y 6, "Selección de celdas").
 - Dispositivos viejos: Partes 1, 2 y 3 cerradas (v0.2.6 probada con éxito en la Bangho con Android 5.0).
 
 ## 3. Próximos pasos
-1. **El usuario prueba App Links (v0.2.8):** actualizar el APK, mandarse por WhatsApp el link de una nota («Copiar (o Enviar) Link») y tocarlo: tiene que abrir la nota en ANote. Probar también con una nota sin acceso (tiene que salir «Solicitar acceso»). Si en el celular abre el navegador: Información de la app → Abrir de forma predeterminada → Agregar vínculo → tildar `luchorcompartidos.github.io`. En Android 5 sale «Abrir con…» (normal).
-2. Corregir lo que el usuario reporte de la selección de celdas con el uso.
-3. Confirmar en la Bangho (Android 5.0), si no se probó todavía: inicio de sesión con Google, sincronización, recordatorios y exportar PDF (Play services de Android 5 no se actualiza desde 2024).
-4. Pruebas pendientes en el celular y en la tablet Android 6: inicio de sesión con Google, exportar/enviar PDF o docx, escribir arriba/debajo de una tabla, recordatorios, sincronización.
-5. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx; arrastrar con el dedo para seleccionar un rango.
+1. **Antes de implementar el inicio de sesión (lo hace el usuario):** en la consola de Firebase (proyecto notas-pro-2026) → Authentication → Sign-in method → Agregar proveedor nuevo → **Correo electrónico/contraseña** → Habilitar (solo la primera opción, no "Vínculo del correo electrónico") → Guardar.
+2. **Implementar el inicio de sesión con correo y contraseña (v0.3.0, Minor)**, según la sección 4. Incluye cambio de `firestore.rules`: el usuario las pega en la consola de Firebase.
+3. **Implementar ocultar/mostrar notas por criterios** (Releases Patch), según la sección 4. Se puede partir en etapas (por ejemplo: reglas y modos; aviso e interruptor; vistas con nombre).
+4. **El usuario prueba App Links (v0.2.8):** actualizar el APK, mandarse por WhatsApp el link de una nota («Copiar (o Enviar) Link») y tocarlo: tiene que abrir la nota en ANote. Probar también con una nota sin acceso (tiene que salir «Solicitar acceso»). Si en el celular abre el navegador: Información de la app → Abrir de forma predeterminada → Agregar vínculo → tildar `luchorcompartidos.github.io`. En Android 5 sale «Abrir con…» (normal).
+5. Corregir lo que el usuario reporte de la selección de celdas con el uso.
+6. Confirmar en la Bangho (Android 5.0), si no se probó todavía: inicio de sesión con Google, sincronización, recordatorios y exportar PDF (Play services de Android 5 no se actualiza desde 2024).
+7. Pruebas pendientes en el celular y en la tablet Android 6: inicio de sesión con Google, exportar/enviar PDF o docx, escribir arriba/debajo de una tabla, recordatorios, sincronización.
+8. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx; arrastrar con el dedo para seleccionar un rango.
 
 ## 4. Decisiones tomadas
 - **Un solo código** para la web y Android (Capacitor), con el aspecto lo más parecido posible en las dos, que en Android se sienta nativa. Backend gratis (Firebase Spark) y hosting en GitHub.
@@ -69,11 +72,34 @@
   - **Pegar:** sobre una sola celda, el bloque desde ahí (agrega filas y columnas si no alcanzan, salvo con celdas combinadas); un solo valor sobre varias celdas, en todas; sobre un rectángulo múltiplo exacto del bloque, lo repite (como Excel); sobre un rectángulo, desde su esquina; sobre celdas salteadas, en orden de lectura (avisa si sobran o faltan). Los huecos de un bloque copiado en ANote no pisan la celda de destino. Queda seleccionado lo pegado.
   - **Eliminar** borra las filas (o columnas) que toca la selección; si son todas, la tabla.
 - **App Links** (v0.2.8): los links de notas (`https://luchorcompartidos.github.io/notas/#/nota/<id>?o=<dueño>`) abren el APK. El usuario creó el repo especial `luchorcompartidos.github.io` (raíz del sitio), que solo tiene `.well-known/assetlinks.json`, `.nojekyll` y README. **En ese repo no crear carpetas con el nombre de otro repo** (taparían la app publicada).
+- **Inicio de sesión con correo y contraseña** (definido 2026-11-26; Release **Minor**, v0.3.0). Motivo del usuario: que quien quiera pueda entrar a ANote con una contraseña exclusiva de esta app, para no depender de la contraseña "universal" de Google.
+  - **Convive con Google:** en la pantalla de inicio, «Continuar con Google» y «Entrar con correo» (con «Crear cuenta» y «Olvidé mi contraseña»). Proveedor "Correo electrónico/contraseña" de Firebase Auth (gratis en Spark; sirve en la web y en el APK sin plugin nativo, también en Android 5).
+  - **Aviso de seguridad** (al iniciar con Google y desde el menú, con «No volver a mostrar»): recomendar activar la **Verificación en 2 Pasos** de Google con **aviso en el celular** o **llave de acceso** (no SMS), y activarla también en el correo de recuperación; con link a la página de Google. ANote no puede saber si la cuenta la tiene activada (Google no lo informa): es solo un aviso.
+  - **Texto literal de la opción** (elegido por el usuario): "Contraseña propia de ANote: recomendable si tu cuenta de Google no tiene la 'Verificación en 2 Pasos'. Usá un correo distinto de ese Gmail (y, si podés, con 'Verificación en 2 Pasos' o 'Doble Factor de Autenticación' 2FA ), y una contraseña que no uses en otro lado."
+  - **Registro:** pedir nombre visible (Google lo trae solo; se usa al compartir y en «editado por»), contraseña fuerte, y **verificar el correo** antes de acceder a lo compartido: las invitaciones se otorgan por correo (`myEmail()` en `firestore.rules`), así que sin verificación alguien podría registrarse con un correo ajeno. Exigir `request.auth.token.email_verified` donde corresponda.
+  - **Pasar una cuenta existente de Google a contraseña propia** (opcional, cada usuario desde el menú): misma cuenta (mismo uid), conserva notas, compartidas y ajustes. Se vincula la credencial de correo y contraseña (`linkWithCredential`), se verifica el correo y se desvincula Google (`unlink(user, 'google.com')`). Se puede volver atrás (revincular Google).
+  - **Bloqueo en el servidor:** para las cuentas que pasaron a contraseña propia, las reglas rechazan accesos con `request.auth.token.firebase.sign_in_provider == 'google.com'` (marca por usuario, por ejemplo en un documento de perfil que el propio usuario no pueda revertir sin reautenticarse con contraseña). **A verificar en la implementación:** qué hace Firebase si alguien entra con Google usando un correo que ya tiene una cuenta con contraseña (vincula, rechaza o crea otra); el bloqueo por reglas cubre el caso igual.
+  - **Reautenticar:** donde hoy se usa `reauthenticateWithPopup` (Google), en las cuentas con contraseña pedir la contraseña (`reauthenticateWithCredential`).
+  - Si una cuenta con contraseña **sin verificar** inicia sesión con Google, Firebase le borra la contraseña: otra razón para verificar el correo.
+  - Los correos de verificación y recuperación salen de una dirección de Firebase (pueden caer en spam; el texto se puede personalizar en la consola).
+  - La cuenta con contraseña es de **un solo factor** (el segundo factor en Firebase requiere un plan pago): por eso la recomendación principal es Google con Verificación en 2 Pasos.
+- **Ocultar/mostrar notas por criterios en la pantalla principal** (definido 2026-11-26; Releases **Patch**; después del inicio de sesión):
+  - Se aplica **solo a la pantalla principal**, como las notas ocultas manuales: en carpetas, etiquetas, archivo, recordatorios, compartidas y búsqueda siguen apareciendo. Se guarda en `settings/prefs` (igual en todos los dispositivos; sin cambio de reglas).
+  - **Criterios (todos):** etiqueta (alguna de las elegidas), carpeta (con opción "incluir subcarpetas"), color de la nota, compartidas (que me compartieron / de un dueño en particular / solo las mías), sin organizar (sin carpeta o sin etiqueta), listas completas (todas las casillas tildadas), antigüedad (sin cambios hace más de N días), bloqueadas con huella y plantillas.
+  - **Dos modos:** «Ocultar las que cumplan…» o «Mostrar solo las que cumplan…» (ej.: ver solo la etiqueta Trabajo).
+  - **Excepción para las fijadas** (opcional): se siguen viendo aunque cumplan una regla.
+  - **Aviso** en la pantalla principal («12 notas ocultas por reglas · Mostrar») para verlas un rato sin tocar las reglas, e **interruptor** para apagar todas las reglas de una vez.
+  - **Vistas con nombre:** guardar combinaciones («Trabajo», «Hogar») y cambiar entre ellas desde el menú.
+  - **Búsqueda:** las encuentra; el filtro «Excluir ocultas» también excluye las ocultas por reglas.
+  - A proponer en la implementación: cómo se combinan varias reglas (cualquiera / todas).
 - **Versiones:** cada pedido define el tipo de Release (la mayoría Patch; la v0.1.0 y la v0.2.0 fueron Minor; las tablas Parte A y B1 fueron Patch por elección del usuario). Si hay otras preguntas pendientes, el tipo de Release se pregunta al final; si no, se avanza con Patch y se avisa el número.
 
 ## 5. Pendientes / dudas abiertas
 - [x] **APK para dispositivos viejos:** Partes 1 (v0.2.1), 2 (v0.2.2) y 3 (v0.2.6) hechas. Un solo APK con mínimo Android 5.0; probado en la Bangho (Android 5.0) y la tablet Android 6.0.1.
 - [x] **Selección de celdas (v0.2.7):** probada por el usuario el 2026-11-26, sin errores dentro del alcance de su prueba.
+- [ ] **Inicio de sesión con correo y contraseña (v0.3.0):** definido, falta implementar (secciones 3 y 4).
+- [ ] **Ocultar/mostrar notas por criterios:** definido, falta implementar (secciones 3 y 4).
+- [ ] **Pantalla de administración de usuarios** (otra etapa, sin definir en detalle): visible solo para el dueño de la app, para gestionar de forma **forzada** acciones que el usuario no puede hacer por sí mismo (por falta de acceso o por urgencia). Ideas ya conversadas: listado de usuarios (ANote lo arma al entrar cada uno: nombre, correo, último ingreso; Firebase no deja listar usuarios desde la app), elegir uno, varios o todos y **cerrarles la sesión** en todos sus dispositivos, y **marcarlos para que se les pida pasar a contraseña propia** (sugerido u obligatorio). Que el próximo inicio con Google muestre siempre el selector de cuentas (Google no permite que una app obligue a pedir la contraseña). Es un cierre hecho por la app (no un bloqueo estricto); para bloquear de verdad, **desactivar** el usuario en la consola de Firebase (no borrarlo: al volver a entrar tendría otro uid y perdería sus notas). Requiere cambio de reglas.
 - [x] **App Links** (v0.2.8): hecho; falta la prueba del usuario (sección 3).
 - **Limitaciones conocidas:**
   - **Sin notificaciones push:** con la app cerrada no llegan los pedidos de acceso, ni las invitaciones, ni los recordatorios creados en otro dispositivo; se ven y se programan al abrir la app. Hacerlo requiere el plan Blaze (Cloud Functions + FCM).
