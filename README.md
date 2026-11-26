@@ -33,6 +33,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | — | v0.2.4 | **Tablas**: si la nota empieza con una tabla (o imagen), tocar entre el título y la tabla, o Enter en el título, crea un renglón arriba con el teclado abierto |
 | — | v0.2.5 | **Atrapador de cierres**: si la app se cierra por un error, en vez de «Se ha detenido la aplicación» muestra el error con «Copiar» y «Enviar…» (para diagnosticar la tablet con Android 5.0) |
 | — | v0.2.6 | **Android 5.0**: la app ya no se cierra al abrir (la barra de estado usaba una función que existe recién desde Android 6) |
+| — | v0.2.7 | **Tablas: selección de celdas**: elegir celdas sueltas, filas y columnas (también mezcladas) tocándolas, con letras y números como en una planilla, rango, todo e invertir; copiar o cortar como bloque o como lista (para pegar en Excel, Sheets o WhatsApp), pegar sobre la selección (agrega filas y columnas si hace falta), color de fondo, alineación, negrita/cursiva/subrayado, borrar y eliminar filas o columnas. Funciona con el dedo en el celular y con Ctrl + clic en la PC |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
 

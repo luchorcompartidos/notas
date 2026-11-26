@@ -15,6 +15,7 @@ import { TableMap, CellSelection } from '@tiptap/pm/tables';
 import { ySyncPluginKey } from 'y-prosemirror';
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import * as Sel from './seleccion.js';
 
 const rid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 const reminderKey = new PluginKey('casillasConRecordatorio');
@@ -654,6 +655,366 @@ export function placeCursorAt(editor, x, y) {
   return !!tableContext(view.state);
 }
 
+/* ---------- Tablas: selección de celdas sueltas, filas y columnas ---------- */
+// Es una selección propia (la de ProseMirror solo admite un rectángulo): un conjunto de celdas "fila,columna"
+// de una tabla, que se marca en pantalla con decoraciones. No toca la nota: no se guarda ni se sincroniza.
+const selKey = new PluginKey('seleccionCeldas');
+const tableAt = (doc, pos) => { const n = pos == null ? null : doc.nodeAt(pos); return n && n.type.name === 'table' ? n : null; };
+const hasMerged = (table) => {
+  let m = false;
+  table.descendants((c) => { if (c.attrs.colspan > 1 || c.attrs.rowspan > 1) m = true; return c.type.name === 'tableRow'; });
+  return m;
+};
+
+const SeleccionCeldas = Extension.create({
+  name: 'seleccionCeldas',
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      key: selKey,
+      state: {
+        init: () => null,
+        apply: (tr, cur, _old, state) => {
+          const meta = tr.getMeta(selKey);
+          if (meta !== undefined) return meta;
+          if (!cur || !tr.docChanged) return cur;
+          // Un cambio que llega de otro dispositivo puede reemplazar todo el documento: se busca la tabla en el mismo lugar.
+          const remote = tr.getMeta(ySyncPluginKey)?.isChangeOrigin;
+          let pos = cur.tablePos;
+          let table = remote ? tableAt(state.doc, pos) : null;
+          if (!table) { pos = tr.mapping.map(cur.tablePos, 1); table = tableAt(state.doc, pos); }
+          if (!table) return null;
+          const m = TableMap.get(table);
+          const cells = new Set([...cur.cells].filter((k) => { const p = Sel.parseKey(k); return p.r < m.height && p.c < m.width; }));
+          const anchor = cur.anchor && cur.anchor.r < m.height && cur.anchor.c < m.width ? cur.anchor : null;
+          return { ...cur, tablePos: pos, cells, anchor };
+        },
+      },
+      props: {
+        decorations(state) {
+          const s = selKey.getState(state);
+          const table = s && tableAt(state.doc, s.tablePos);
+          if (!table) return null;
+          const map = TableMap.get(table);
+          const start = s.tablePos + 1;
+          const cls = new Map();
+          const add = (p, c) => cls.set(p, `${cls.get(p) || ''} ${c}`);
+          s.cells.forEach((k) => {
+            const { r, c } = Sel.parseKey(k);
+            if (r < map.height && c < map.width) add(map.map[r * map.width + c], 'cell-sel');
+          });
+          if (s.anchor && s.anchor.r < map.height && s.anchor.c < map.width) add(map.map[s.anchor.r * map.width + s.anchor.c], 'cell-anchor');
+          const decos = [Decoration.node(s.tablePos, s.tablePos + table.nodeSize, { class: 'tbl-selecting' })];
+          cls.forEach((c, p) => { const n = table.nodeAt(p); if (n) decos.push(Decoration.node(start + p, start + p + n.nodeSize, { class: c.trim() })); });
+          return DecorationSet.create(state.doc, decos);
+        },
+      },
+    })];
+  },
+});
+
+// Estado de la selección (o null si no se está seleccionando).
+export function selState(editor) {
+  if (!editor || editor.isDestroyed) return null;
+  const s = selKey.getState(editor.state);
+  const table = s && tableAt(editor.state.doc, s.tablePos);
+  if (!table) return null;
+  const map = TableMap.get(table);
+  return { ...s, table, map, rows: map.height, cols: map.width };
+}
+function setSel(editor, value) { editor.view.dispatch(editor.state.tr.setMeta(selKey, value)); }
+
+// Celda de la tabla a la que pertenece un elemento de la pantalla (td/th): { tablePos, r, c }.
+export function cellAtDom(editor, el) {
+  const view = editor.view;
+  const cellEl = el?.closest?.('td, th');
+  if (!cellEl || !view.dom.contains(cellEl)) return null;
+  let pos;
+  try { pos = view.posAtDOM(cellEl, 0); } catch { return null; }
+  const $p = view.state.doc.resolve(Math.min(pos, view.state.doc.content.size));
+  let cellPos = null;
+  for (let d = $p.depth; d > 0; d--) {
+    const name = $p.node(d).type.name;
+    if (cellPos == null && (name === 'tableCell' || name === 'tableHeader')) cellPos = $p.before(d);
+    if (name === 'table') {
+      if (cellPos == null) return null;
+      const map = TableMap.get($p.node(d));
+      const rect = map.findCell(cellPos - $p.start(d));
+      return { tablePos: $p.before(d), r: rect.top, c: rect.left };
+    }
+  }
+  return null;
+}
+
+// Empieza a seleccionar: con la celda indicada, o con la del cursor (y las de una selección hecha con el mouse).
+export function startSelection(editor, hit = null) {
+  const st = editor.state;
+  if (hit) {
+    setSel(editor, { tablePos: hit.tablePos, cells: new Set([Sel.cellKey(hit.r, hit.c)]), anchor: { r: hit.r, c: hit.c } });
+    return true;
+  }
+  const ctx = tableContext(st);
+  if (!ctx) return false;
+  const cells = new Set();
+  if (st.selection instanceof CellSelection) {
+    st.selection.forEachCell((_n, pos) => { const r = ctx.map.findCell(pos - ctx.tableStart); cells.add(Sel.cellKey(r.top, r.left)); });
+  } else if (ctx.cellPos != null) cells.add(Sel.cellKey(ctx.rect.top, ctx.rect.left));
+  setSel(editor, { tablePos: ctx.tablePos, cells, anchor: { r: ctx.rect.top, c: ctx.rect.left } });
+  return true;
+}
+export function endSelection(editor) { if (selKey.getState(editor.state)) setSel(editor, null); }
+
+// Cambios de la selección. op: 'toggle' (celda), 'range' (desde la última celda tocada), 'row', 'col', 'all', 'invert', 'none'.
+export function updateSelection(editor, op, hit = null) {
+  const s = selState(editor);
+  if (!s) return false;
+  // Tocar una celda de otra tabla empieza una selección nueva en esa tabla.
+  if (hit && hit.tablePos !== s.tablePos) return startSelection(editor, hit);
+  let cells = new Set(s.cells); let anchor = s.anchor;
+  const at = hit || anchor || { r: 0, c: 0 };
+  switch (op) {
+    case 'toggle': { const k = Sel.cellKey(at.r, at.c); if (cells.has(k)) cells.delete(k); else cells.add(k); anchor = { r: at.r, c: at.c }; break; }
+    case 'range': cells = Sel.addRange(cells, anchor || at, at); anchor = { r: at.r, c: at.c }; break;
+    case 'row': cells = Sel.toggleLine(cells, 'row', at.r, s.rows, s.cols); anchor = { r: at.r, c: anchor?.c ?? 0 }; break;
+    case 'col': cells = Sel.toggleLine(cells, 'col', at.c, s.rows, s.cols); anchor = { r: anchor?.r ?? 0, c: at.c }; break;
+    case 'all': cells = Sel.allKeys(s.rows, s.cols); break;
+    case 'invert': cells = Sel.invertKeys(cells, s.rows, s.cols); break;
+    case 'none': cells = new Set(); break;
+    default: return false;
+  }
+  setSel(editor, { tablePos: s.tablePos, cells, anchor });
+  return true;
+}
+
+// Resumen para la barra y el menú: cuántas celdas, filas y columnas completas, y las que toca.
+export function selectionInfo(editor) {
+  const s = selState(editor);
+  if (!s) return null;
+  return { count: s.cells.size, nRows: s.rows, nCols: s.cols, anchor: s.anchor, merged: hasMerged(s.table), ...Sel.lines(s.cells, s.rows, s.cols) };
+}
+
+// Posiciones (en el documento) de las celdas seleccionadas, de la última a la primera (así no se corren al cambiarlas).
+function selCellPositions(s) {
+  const start = s.tablePos + 1;
+  const set = new Set();
+  s.cells.forEach((k) => { const { r, c } = Sel.parseKey(k); if (r < s.rows && c < s.cols) set.add(start + s.map.map[r * s.cols + c]); });
+  return [...set].sort((a, b) => b - a);
+}
+
+// Color de fondo y alineación de las celdas seleccionadas.
+export function selApplyAttrs(editor, attrs) {
+  const s = selState(editor);
+  if (!s || !s.cells.size) return false;
+  const clean = {};
+  Object.entries(attrs).forEach(([k, v]) => { clean[k] = (k === 'align' && v === 'left') || (k === 'valign' && v === 'top') || (k === 'bg' && !BG_KEYS.includes(v)) ? null : v; });
+  const tr = editor.state.tr;
+  selCellPositions(s).forEach((pos) => { const n = tr.doc.nodeAt(pos); if (n) tr.setNodeMarkup(pos, null, { ...n.attrs, ...clean }); });
+  if (tr.docChanged) editor.view.dispatch(tr);
+  return true;
+}
+
+// Valores actuales (si todas las celdas coinciden) para marcar los botones del panel.
+export function selCommonAttrs(editor) {
+  const s = selState(editor);
+  if (!s || !s.cells.size) return {};
+  const out = {};
+  ['align', 'valign', 'bg'].forEach((k) => {
+    const vals = new Set(selCellPositions(s).map((p) => editor.state.doc.nodeAt(p)?.attrs[k] || null));
+    out[k] = vals.size === 1 ? [...vals][0] : undefined;
+  });
+  out.align = out.align === undefined ? undefined : out.align || 'left';
+  out.valign = out.valign === undefined ? undefined : out.valign || 'top';
+  return out;
+}
+
+// Negrita, cursiva o subrayado en todo el texto de las celdas: si ya lo tiene todo, se quita; si no, se pone.
+export function selToggleMark(editor, markName) {
+  const s = selState(editor);
+  const type = editor.schema.marks[markName];
+  if (!s || !s.cells.size || !type) return null;
+  const doc = editor.state.doc;
+  const ranges = selCellPositions(s).map((p) => ({ from: p + 1, to: p + doc.nodeAt(p).nodeSize - 1 }));
+  let any = false; let all = true;
+  ranges.forEach(({ from, to }) => doc.nodesBetween(from, to, (n) => {
+    if (!n.isText) return;
+    any = true;
+    if (!type.isInSet(n.marks)) all = false;
+  }));
+  if (!any) return 'empty';
+  const tr = editor.state.tr;
+  ranges.forEach(({ from, to }) => (all ? tr.removeMark(from, to, type) : tr.addMark(from, to, type.create())));
+  editor.view.dispatch(tr);
+  return all ? 'removed' : 'added';
+}
+
+// Borra el contenido (deja el formato de la celda: color y alineación).
+export function selClear(editor) {
+  const s = selState(editor);
+  if (!s || !s.cells.size) return 0;
+  const tr = editor.state.tr;
+  const p0 = editor.state.schema.nodes.paragraph;
+  let n = 0;
+  selCellPositions(s).forEach((pos) => {
+    const cell = tr.doc.nodeAt(pos);
+    if (!cell) return;
+    if (cell.childCount === 1 && cell.firstChild.type === p0 && !cell.firstChild.content.size) return;
+    tr.replaceWith(pos + 1, pos + cell.nodeSize - 1, p0.create());
+    n++;
+  });
+  if (tr.docChanged) editor.view.dispatch(tr);
+  return n;
+}
+
+// Texto de una celda: un renglón por párrafo (o casilla, o ítem de lista).
+function cellText(node) {
+  const parts = [];
+  node.descendants((n) => { if (n.isTextblock) { parts.push(n.textContent); return false; } return true; });
+  return parts.join('\n').replace(/\n+$/, '');
+}
+
+// "Portapapeles" de celdas de ANote: conserva el formato (negrita, color, alineación) al pegar dentro de la app.
+// Si lo que hay en el portapapeles del sistema es lo mismo que se copió acá, se pega desde este.
+let cellClip = null;
+const normText = (t) => String(t ?? '').replace(/\r\n?/g, '\n').replace(/\n+$/, '');
+export function getCellClip() { return cellClip; }
+
+// Copia la selección como bloque ('block') o como lista ('list'). Devuelve el texto para el portapapeles del sistema.
+export function selCopy(editor, mode = 'block') {
+  const s = selState(editor);
+  if (!s || !s.cells.size) return null;
+  const layout = Sel.copyLayout(s.cells, mode);
+  const node = ({ r, c }) => s.table.nodeAt(s.map.map[r * s.cols + c]);
+  const texts = layout.map((row) => row.map((p) => (p ? cellText(node(p)) : '')));
+  const grid = layout.map((row) => row.map((p) => (p ? node(p).toJSON() : null)));
+  // Un valor con varios renglones va entre comillas (como Excel), para que siga siendo un solo valor.
+  const text = Sel.toTSV(texts);
+  cellClip = { text: normText(text), grid, mode, count: s.cells.size, h: layout.length, w: layout[0]?.length || 0 };
+  return { text, mode, count: s.cells.size, h: cellClip.h, w: cellClip.w };
+}
+
+// Agrega columnas a la derecha y filas abajo hasta llegar a rows × cols.
+function growTable(tr, tablePos, rows, cols, schema) {
+  let table = tr.doc.nodeAt(tablePos);
+  let map = TableMap.get(table);
+  if (cols > map.width) {
+    const headerRow = table.firstChild && Array.from({ length: table.firstChild.childCount }, (_, i) => table.firstChild.child(i)).every((c) => c.type.name === 'tableHeader');
+    let manual = false;
+    table.descendants((c) => { if (c.attrs.colwidth?.some((w) => w > 0)) manual = true; return c.type.name === 'tableRow'; });
+    manual = manual && table.attrs.colMode !== 'auto';
+    let rp = tablePos + 1; const ends = [];
+    for (let r = 0; r < table.childCount; r++) { rp += table.child(r).nodeSize; ends.push(rp - 1); }
+    for (let r = table.childCount - 1; r >= 0; r--) {
+      const type = r === 0 && headerRow ? schema.nodes.tableHeader : schema.nodes.tableCell;
+      const cells = [];
+      for (let c = map.width; c < cols; c++) cells.push(type.createAndFill({ colwidth: manual ? [CELL_MIN * 2] : null }));
+      tr.insert(ends[r], cells);
+    }
+    table = tr.doc.nodeAt(tablePos);
+    map = TableMap.get(table);
+  }
+  if (rows > map.height) {
+    let headerCol = true;
+    table.forEach((row) => { if (row.firstChild?.type.name !== 'tableHeader') headerCol = false; });
+    const last = table.lastChild;
+    const newRows = [];
+    for (let r = map.height; r < rows; r++) {
+      const cells = [];
+      for (let c = 0; c < map.width; c++) {
+        const ref = table.nodeAt(map.map[(map.height - 1) * map.width + c]);
+        const cw = ref && ref.attrs.colspan === 1 ? ref.attrs.colwidth : null;
+        cells.push((c === 0 && headerCol ? schema.nodes.tableHeader : schema.nodes.tableCell).createAndFill({ colwidth: cw }));
+      }
+      newRows.push(schema.nodes.tableRow.create({ ...last.attrs, height: null }, cells));
+    }
+    tr.insert(tablePos + table.nodeSize - 1, newRows);
+  }
+}
+
+// Pega sobre la selección. text = lo que hay en el portapapeles del sistema (null = usar lo copiado en ANote).
+// Devuelve { ok, reason?, plan } (reason: 'empty' | 'merged').
+export function selPaste(editor, text) {
+  const s = selState(editor);
+  if (!s || !s.cells.size) return { ok: false, reason: 'nosel' };
+  const schema = editor.state.schema;
+  const useClip = cellClip && (text == null || normText(text) === cellClip.text);
+  let src;
+  if (useClip) src = cellClip.grid.map((row) => row.map((j) => (j ? { json: j } : null)));
+  else {
+    const rows = Sel.parseTSV(text || '');
+    src = rows.map((row) => row.map((v) => ({ text: v })));
+  }
+  const plan = Sel.pastePlan(src, s.cells);
+  if (!plan.cells.length) return { ok: false, reason: 'empty', plan };
+  const tr = editor.state.tr;
+  let grew = false;
+  if (plan.rows > s.rows || plan.cols > s.cols) {
+    if (hasMerged(s.table)) return { ok: false, reason: 'merged', plan };
+    growTable(tr, s.tablePos, plan.rows, plan.cols, schema);
+    grew = true;
+  }
+  const table = tr.doc.nodeAt(s.tablePos);
+  const map = TableMap.get(table);
+  const start = s.tablePos + 1;
+  const para = (t) => schema.nodes.paragraph.create(null, t ? schema.text(t) : null);
+  const jobs = new Map();
+  plan.cells.forEach(({ r, c, v }) => { if (r < map.height && c < map.width) jobs.set(start + map.map[r * map.width + c], v); });
+  [...jobs.keys()].sort((a, b) => b - a).forEach((pos) => {
+    const v = jobs.get(pos);
+    const cell = tr.doc.nodeAt(pos);
+    let content; let attrs = cell.attrs;
+    if (v.json) {
+      try {
+        const n = schema.nodeFromJSON(v.json);
+        content = n.content;
+        attrs = { ...cell.attrs, align: n.attrs.align || null, valign: n.attrs.valign || null, bg: n.attrs.bg || null };
+      } catch { content = null; }
+    } else {
+      const ls = String(v.text).split('\n');
+      content = ls.map(para);
+    }
+    if (!content || content.size === 0) content = para('');
+    tr.replaceWith(pos + 1, pos + cell.nodeSize - 1, content);
+    if (attrs !== cell.attrs) tr.setNodeMarkup(pos, null, attrs);
+  });
+  // Queda seleccionado lo que se pegó.
+  const cells = new Set(plan.cells.map(({ r, c }) => Sel.cellKey(r, c)));
+  const first = plan.cells[0];
+  tr.setMeta(selKey, { tablePos: s.tablePos, cells, anchor: { r: first.r, c: first.c } });
+  editor.view.dispatch(tr);
+  return { ok: true, plan, grew, fromClip: useClip };
+}
+
+// Elimina las filas ('rows') o columnas ('cols') que toca la selección. Si son todas, elimina la tabla.
+export function selDeleteLines(editor, kind) {
+  const s = selState(editor);
+  if (!s || !s.cells.size) return { ok: false };
+  if (hasMerged(s.table)) return { ok: false, reason: 'merged' };
+  const info = Sel.lines(s.cells, s.rows, s.cols);
+  const list = kind === 'rows' ? info.rows : info.cols;
+  const total = kind === 'rows' ? s.rows : s.cols;
+  const tr = editor.state.tr;
+  tr.setMeta(selKey, null);
+  if (list.length >= total) {
+    tr.delete(s.tablePos, s.tablePos + s.table.nodeSize);
+    editor.view.dispatch(tr);
+    return { ok: true, table: true, list };
+  }
+  if (kind === 'rows') {
+    const starts = []; let p = s.tablePos + 1;
+    for (let r = 0; r < s.table.childCount; r++) { starts.push(p); p += s.table.child(r).nodeSize; }
+    list.slice().sort((a, b) => b - a).forEach((r) => tr.delete(starts[r], starts[r] + s.table.child(r).nodeSize));
+  } else {
+    const start = s.tablePos + 1;
+    const del = [];
+    list.forEach((c) => { for (let r = 0; r < s.rows; r++) { const p = start + s.map.map[r * s.cols + c]; del.push([p, p + s.table.nodeAt(p - start).nodeSize]); } });
+    del.sort((a, b) => b[0] - a[0]).forEach(([a, b]) => tr.delete(a, b));
+  }
+  // El cursor queda en la tabla (al principio de la primera celda).
+  const t = tr.doc.nodeAt(s.tablePos);
+  if (t) tr.setSelection(TextSelection.near(tr.doc.resolve(s.tablePos + 2)));
+  editor.view.dispatch(tr);
+  return { ok: true, list };
+}
+
 // Extensiones del contenido (las mismas para mostrar versiones y exportar)
 export function contentExtensions({ resolveImage, reminderIds } = {}) {
   return [
@@ -728,6 +1089,7 @@ export function createEditor(element, { ydoc, onUpdate, onState, onCreate, remin
       Placeholder.configure({ placeholder: 'Escribí tu nota…' }),
       PegarTablaTSV,
       RenglonFinal,
+      SeleccionCeldas,
       Collaboration.configure({ document: ydoc, field: 'default' }),
     ],
     editorProps: {

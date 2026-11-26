@@ -111,12 +111,14 @@
                  autocomplete="off" autocapitalize="sentences" enterkeyhint="next" spellcheck="true">
           <div class="chips-row note-chips" id="note-chips"></div>
           <div id="editor"></div>
+          <div class="sel-handles" id="sel-handles" hidden></div>
           <div class="link-previews" id="link-previews"></div>
           <p class="edited"><button class="sync-state" id="sync-state" type="button"></button><span id="edited"></span></p>
         </div>
       </main>
       <nav class="toolbar table-bar" id="table-bar" aria-label="Tabla" hidden>
         <button class="tbl-chip ripple" data-tbl="menu" aria-label="Opciones de la tabla" data-icon="table"><span id="tbl-pos">Tabla</span></button>
+        <button class="tbl-btn ripple" data-tbl="select" title="Seleccionar celdas sueltas, filas o columnas">☐ Seleccionar</button>
         <span class="tool-sep"></span>
         <button class="tbl-btn ripple" data-tbl="rowBefore" title="Insertar fila arriba">+ Fila ↑</button>
         <button class="tbl-btn ripple" data-tbl="rowAfter" title="Insertar fila abajo">+ Fila ↓</button>
@@ -130,6 +132,32 @@
         <span class="tool-sep"></span>
         <button class="tbl-btn danger ripple" data-tbl="deleteRow" title="Eliminar fila">− Fila</button>
         <button class="tbl-btn danger ripple" data-tbl="deleteCol" title="Eliminar columna">− Col</button>
+      </nav>
+      <!-- Selección de celdas: arriba, qué se selecciona; abajo (en lugar de la barra de formato), qué se hace -->
+      <nav class="toolbar table-bar sel-bar" id="sel-bar" aria-label="Selección de celdas" hidden>
+        <button class="tbl-chip ripple" data-sel="menu" aria-label="Acciones de la selección" data-icon="selectAll"><span id="sel-count">1 celda</span></button>
+        <button class="tbl-btn sel-done ripple" data-sel="done" title="Terminar la selección">✓ Listo</button>
+        <span class="tool-sep"></span>
+        <button class="tbl-btn ripple" data-sel="row" id="sel-row" title="Seleccionar (o quitar) la fila entera">Fila</button>
+        <button class="tbl-btn ripple" data-sel="col" id="sel-col" title="Seleccionar (o quitar) la columna entera">Columna</button>
+        <button class="tbl-btn ripple" data-sel="range" id="sel-range" title="Tocá otra celda para seleccionar el rectángulo entre las dos">Rango</button>
+        <span class="tool-sep"></span>
+        <button class="tbl-btn ripple" data-sel="all" title="Seleccionar toda la tabla">Todo</button>
+        <button class="tbl-btn ripple" data-sel="invert" title="Invertir la selección">Invertir</button>
+        <button class="tbl-btn ripple" data-sel="none" title="Quitar la selección">Ninguna</button>
+      </nav>
+      <nav class="toolbar sel-actions" id="sel-actions" aria-label="Acciones de la selección" hidden>
+        <button class="tbl-btn ripple" data-sel="copy" title="Copiar"><span data-icon="copy"></span>Copiar</button>
+        <button class="tbl-btn ripple" data-sel="cut" title="Cortar">Cortar</button>
+        <button class="tbl-btn ripple" data-sel="paste" title="Pegar">Pegar</button>
+        <span class="tool-sep"></span>
+        <button class="tool tbl-color ripple" data-sel="format" aria-label="Color de fondo y alineación" title="Color de fondo y alineación" data-icon="palette"></button>
+        <button class="tool ripple" data-sel="bold" aria-label="Negrita" title="Negrita" data-icon="bold"></button>
+        <button class="tool ripple" data-sel="italic" aria-label="Cursiva" title="Cursiva" data-icon="italic"></button>
+        <button class="tool ripple" data-sel="underline" aria-label="Subrayado" title="Subrayado" data-icon="underline"></button>
+        <span class="tool-sep"></span>
+        <button class="tbl-btn ripple" data-sel="clear" title="Borrar el contenido">Borrar</button>
+        <button class="tbl-btn danger ripple" data-sel="delete" title="Eliminar filas o columnas">Eliminar…</button>
       </nav>
       <nav class="toolbar" id="toolbar" aria-label="Formato">
         <button class="tool ripple" data-cmd="undo" aria-label="Deshacer" data-icon="undo"></button>

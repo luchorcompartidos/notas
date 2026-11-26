@@ -696,6 +696,34 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
 #menu.cell-menu .menu-item svg { width: 18px; height: 18px; vertical-align: -4px; margin-right: 4px; }
 .ProseMirror td, .ProseMirror th { -webkit-touch-callout: none; }
 
+/* ===== Selección de celdas sueltas, filas y columnas ===== */
+.editor-wrap { position: relative; }
+.ProseMirror .cell-sel::after { content: ""; position: absolute; inset: 0; background: color-mix(in srgb, var(--primary) 22%, transparent); box-shadow: inset 0 0 0 2px var(--primary); pointer-events: none; }
+.ProseMirror .cell-anchor::before { content: ""; position: absolute; inset: 3px; border: 2px dashed var(--primary); border-radius: 2px; pointer-events: none; }
+/* Lugar para las letras (arriba) y los números (a la izquierda) */
+.ProseMirror .tableWrapper.tbl-selecting { padding: 30px 2px 2px 36px; }
+.ProseMirror .tbl-selecting td, .ProseMirror .tbl-selecting th { cursor: pointer; -webkit-user-select: none; user-select: none; caret-color: transparent; }
+.sel-handles { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 3; }
+.sel-handle {
+  position: absolute; display: flex; align-items: center; justify-content: center; box-sizing: border-box; overflow: hidden;
+  font-size: 12px; font-weight: 600; color: var(--on-surface-variant); background: var(--surface-container, var(--surface));
+  border: 1px solid var(--outline-variant); border-radius: 6px; touch-action: manipulation;
+}
+.sel-handle svg { width: 16px; height: 16px; }
+.sel-handle.part { background: color-mix(in srgb, var(--primary) 16%, var(--surface)); color: var(--on-surface); }
+.sel-handle.on { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
+/* Barras: arriba (qué se selecciona) y abajo, en lugar de la barra de formato (qué se hace) */
+#view-editor.selecting #toolbar { visibility: hidden; }
+.sel-actions { z-index: 1; }
+.tbl-btn svg { width: 18px; height: 18px; }
+.tbl-btn.on { background: var(--secondary-container); color: var(--on-secondary-container); }
+.tbl-btn:disabled, .sel-actions .tool:disabled { opacity: .4; }
+.sel-done { color: var(--primary); }
+.paste-box { width: 100%; box-sizing: border-box; min-height: 110px; padding: 10px; font: inherit; font-size: 14px; color: var(--on-surface); background: transparent; border: 1px solid var(--outline); border-radius: 8px; resize: vertical; }
+.copy-mode { align-items: flex-start; text-align: left; }
+.copy-mode small { color: var(--on-surface-variant); font-size: 12.5px; line-height: 1.35; }
+.copy-mode .radio { margin-top: 2px; flex: 0 0 auto; }
+
 /* ---------- WebView viejas (Android 5/6, Chromium 95–106) ----------
    Solo se aplica donde no existe color-mix() o :has(); en la web y en los celulares actuales no cambia nada. */
 @supports not (color: color-mix(in srgb, red 50%, blue)) {
@@ -708,6 +736,8 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
   .sync-banner { background: rgba(179, 38, 30, .14); }
   .ProseMirror th { background: rgba(127, 127, 127, .12); }
   .ProseMirror .selectedCell::after { background: rgba(103, 80, 164, .18); }
+  .ProseMirror .cell-sel::after { background: rgba(103, 80, 164, .22); }
+  .sel-handle.part { background: rgba(103, 80, 164, .16); }
 }
 @supports not selector(:has(a)) {
   body.editor-open .snackbar { bottom: calc(var(--toolbar-h) + 12px + env(safe-area-inset-bottom) + var(--kb)); }

@@ -8,7 +8,10 @@ import {
   tableSizes, setColumnWidth, setColumnsMode, setRowHeight, setRowsMode,
   copyTablePart, insertCopied, duplicateTablePart, getTableClip, CELL_BG, sortTable, placeCursorAt,
   needsTrailingParagraph, writeAtEnd, needsLeadingParagraph, writeAtStart,
+  selState, cellAtDom, startSelection, endSelection, updateSelection, selectionInfo, selApplyAttrs, selCommonAttrs,
+  selToggleMark, selClear, selCopy, selPaste, selDeleteLines, getCellClip,
 } from './editor.js';
+import { colName, listText } from './seleccion.js';
 import * as Y from 'yjs';
 import { generateHTML, generateJSON } from '@tiptap/core';
 import {
@@ -22,7 +25,7 @@ import {
   REPEATS, SNOOZE_MIN, nextOccurrence, formatWhen, initNativeReminders, ensureNativePermissions,
   syncNative, syncWeb, askWebNotifications, showWebNotification,
 } from './reminders.js';
-import { initNative, setStatusBar, haptic, minimizeApp, isNative, listenIntents } from './native.js';
+import { initNative, setStatusBar, haptic, minimizeApp, isNative, listenIntents, clipboardWrite, clipboardRead, hideKeyboard } from './native.js';
 import { APP_VERSION, CHANGELOG_URL, getLatestRelease, isNewer, formatDate } from './version.js';
 import { applyTextDiff, pendingList, flushNote, lastVerified } from './sync.js';
 import { CloudRepo, LocalRepo, orgId } from './repo.js';
@@ -619,7 +622,7 @@ function paintEditorChrome() {
   $('#banner-text').textContent = trashed ? 'Esta nota está en la papelera.' : 'Solo lectura: te compartieron esta nota para ver.';
   $('#btn-restore').hidden = !trashed;
   $('#toolbar').hidden = readOnly;
-  if (readOnly) { $('#table-bar').hidden = true; $('#view-editor').classList.remove('in-table'); }
+  if (readOnly) { $('#table-bar').hidden = true; $('#view-editor').classList.remove('in-table'); hideSelBars(); }
   $('#btn-share').hidden = trashed;
   $('#btn-share').classList.toggle('active', isShared(noteById(c.id)));
   $('#btn-pin').hidden = trashed;
@@ -663,6 +666,7 @@ async function openNote(id, { push = true, isNew = false, meta = {} } = {}) {
   state.current = c;
   $('#table-bar').hidden = true;
   $('#view-editor').classList.remove('in-table');
+  hideSelBars();
   $('#note-title').value = n?.title || '';
   $('#editor-scroll').scrollTop = 0;
   paintEditorChrome();
@@ -762,6 +766,7 @@ async function closeEditor() {
 
 function goBack() {
   if (closeOverlays()) return;
+  if (state.view === 'editor' && isSelecting()) { finishSelection(); return; }
   if (state.view === 'editor') {
     if (state.pushed) history.back();
     else { history.replaceState(null, '', location.pathname + location.search); closeEditor(); }
@@ -823,6 +828,7 @@ const tableUi = { cols: 3, rows: 3, header: true, scope: 'cell' };
 // Barra de tabla (arriba de la barra de formato): se ve solo con el cursor dentro de una tabla.
 function updateTableBar(ed) {
   const bar = $('#table-bar');
+  if (updateSelBars(ed)) { bar.hidden = true; $('#view-editor').classList.add('in-table'); return; }
   const ctx = ed.isEditable && !$('#toolbar').hidden ? tableContext(ed.state) : null;
   bar.hidden = !ctx;
   $('#view-editor').classList.toggle('in-table', !!ctx);
@@ -851,6 +857,7 @@ function bindTableBar() {
       const ctx = tableContext(editor.state);
       if (!ctx) return;
       if (cmd === 'menu') { openTableSheet(); return; }
+      if (cmd === 'select') { beginSelection(); return; }
       if (cmd === 'size') { openTableSheet({ scrollTo: 'size' }); return; }
       if (cmd === 'color') { openTableSheet({ scrollTo: 'cells' }); return; }
       if (cmd === 'alignH') {
@@ -956,6 +963,7 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
   const clipNote = clip ? `<p class="sheet-text tbl-clip">${icon('copy')} Copiada: ${clipRow ? `fila ${clip.index}` : `columna ${clip.index}`} (${clip.cells.length} celdas). Se puede insertar en esta tabla o en otra, también de otra nota.</p>` : '';
   openSheet(`
     <h2 class="sheet-title">${icon('table')} Tabla <small class="ver">${ctx.cols} ${ctx.cols === 1 ? 'columna' : 'columnas'} × ${ctx.rows} ${ctx.rows === 1 ? 'fila' : 'filas'} · estás en la fila ${ctx.row}, columna ${ctx.col}</small></h2>
+    <div class="tbl-group"><h3>Selección</h3><div class="chips-row">${act('select', 'Seleccionar celdas, filas o columnas…', ' chip-on')}</div></div>
     <div class="tbl-group"><h3>Filas</h3><div class="chips-row">${act('rowBefore', '+ Insertar arriba')}${act('rowAfter', '+ Insertar abajo')}${act('copyRow', `Copiar fila ${ctx.row}`)}${act('dupRow', 'Duplicar fila')}${clipRow ? act('pasteRowBefore', '⤒ Insertar copiada arriba', ' chip-on') + act('pasteRowAfter', '⤓ Insertar copiada abajo', ' chip-on') : ''}${act('deleteRow', '− Eliminar fila', ' danger')}</div></div>
     <div class="tbl-group"><h3>Columnas</h3><div class="chips-row">${act('colBefore', '+ Insertar a la izquierda')}${act('colAfter', '+ Insertar a la derecha')}${act('copyCol', `Copiar columna ${ctx.col}`)}${act('dupCol', 'Duplicar columna')}${clipCol ? act('pasteColBefore', '⇤ Insertar copiada a la izquierda', ' chip-on') + act('pasteColAfter', '⇥ Insertar copiada a la derecha', ' chip-on') : ''}${act('deleteCol', '− Eliminar columna', ' danger')}</div></div>
     ${clipNote}
@@ -978,7 +986,7 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
     </div>
     <div class="tbl-group"><h3>Encabezado</h3><div class="chips-row">${act('headerRow', `${ctx.headerRow ? '✓ ' : ''}Fila de encabezado`, ctx.headerRow ? ' chip-on' : '')}${act('headerCol', `${ctx.headerCol ? '✓ ' : ''}Columna de encabezado`, ctx.headerCol ? ' chip-on' : '')}</div></div>
     <div class="tbl-group"><h3>Tabla</h3><div class="chips-row">${act('textBefore', 'Escribir arriba de la tabla')}${act('textAfter', 'Escribir debajo de la tabla')}${act('duplicate', 'Duplicar tabla')}${act('deleteTable', 'Eliminar tabla', ' danger')}</div></div>
-    <p class="sheet-text tbl-tip">Con teclado: Tab pasa a la celda siguiente y, en la última, agrega una fila. Podés pegar celdas copiadas de Excel o Google Sheets y se arma la tabla. Dentro de una celda podés usar casillas, listas y formato. En la PC, el ancho de una columna también se cambia arrastrando su borde. En el celular, mantené apretada una celda para ver su menú (en la PC, clic derecho; Shift + clic derecho abre el menú del navegador).</p>
+    <p class="sheet-text tbl-tip">Con teclado: Tab pasa a la celda siguiente y, en la última, agrega una fila. Podés pegar celdas copiadas de Excel o Google Sheets y se arma la tabla. Dentro de una celda podés usar casillas, listas y formato. En la PC, el ancho de una columna también se cambia arrastrando su borde. En el celular, mantené apretada una celda para ver su menú (en la PC, clic derecho; Shift + clic derecho abre el menú del navegador). Para elegir varias celdas sueltas, filas o columnas: «Seleccionar» (en la PC también Ctrl + clic).</p>
   `, (body) => {
     // Al volver a dibujar el panel se mantiene el desplazamiento (si no, salta arriba en cada toque).
     const reopen = () => {
@@ -1016,6 +1024,7 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
     body.querySelectorAll('[data-sval]').forEach((inp) => inp.addEventListener('change', () => { if (inp.value !== '') applySize(inp.dataset.sval, inp.value); }));
     body.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', async () => {
       const cmd = b.dataset.act;
+      if (cmd === 'select') { closeOverlays(); beginSelection(); return; }
       if (cmd === 'deleteTable') {
         closeOverlays();
         runTableCommand(editor, cmd, { focus: false });
@@ -1079,6 +1088,8 @@ function openCellMenu(x, y) {
   const clip = getTableClip();
   const run = (fn) => () => { if (editor && tableContext(editor.state)) fn(); };
   const items = [
+    { label: `${icon('selectAll')} Seleccionar celdas, filas o columnas…`, onClick: run(() => beginSelection()) },
+    { divider: true },
     { label: '↑ Escribir arriba de la tabla', onClick: run(() => runTableCommand(editor, 'textBefore')) },
     { label: '↓ Escribir debajo de la tabla', onClick: run(() => runTableCommand(editor, 'textAfter')) },
     { divider: true },
@@ -1119,8 +1130,16 @@ function bindCellPress() {
   const canUse = (target) => editor && editor.isEditable && !$('#toolbar').hidden && target.closest?.('td, th');
   let timer = null; let sx = 0; let sy = 0; let fired = false;
   const cancel = () => { clearTimeout(timer); timer = null; };
-  const open = (x, y) => {
+  const open = (x, y, target) => {
     if (Date.now() - cellMenuAt < 700) return; // ya se abrió (touch + contextmenu)
+    if (isSelecting()) {
+      // Seleccionando: la celda apretada se suma a la selección (si no estaba) y se abre el menú de la selección.
+      const hit = cellAtDom(editor, target || document.elementFromPoint(x, y));
+      const s = selState(editor);
+      if (hit && (hit.tablePos !== s.tablePos || !s.cells.has(`${hit.r},${hit.c}`))) updateSelection(editor, 'toggle', hit);
+      openSelMenu({ getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y, width: 0, height: 0 }) }, true);
+      return;
+    }
     if (placeCursorAt(editor, x, y)) openCellMenu(x, y);
   };
   // Celular: mantener apretado ~0,5 s sin mover el dedo.
@@ -1129,7 +1148,8 @@ function bindCellPress() {
     if (e.touches.length !== 1 || !canUse(e.target)) { cancel(); return; }
     const t = e.touches[0]; sx = t.clientX; sy = t.clientY;
     cancel();
-    timer = setTimeout(() => { timer = null; fired = true; open(sx, sy); }, 520);
+    const target = e.target;
+    timer = setTimeout(() => { timer = null; fired = true; open(sx, sy, target); }, 520);
   }, { passive: true });
   host.addEventListener('touchmove', (e) => {
     const t = e.touches[0];
@@ -1143,14 +1163,424 @@ function bindCellPress() {
     if (e.shiftKey || !canUse(e.target)) return;
     e.preventDefault();
     cancel();
-    open(e.clientX, e.clientY);
+    open(e.clientX, e.clientY, e.target);
   });
+}
+
+/* ---------- Tablas: selección de celdas sueltas, filas y columnas ---------- */
+// Se entra con «Seleccionar» (barra de tabla, menú de la celda o panel) o, en la PC, con Ctrl + clic.
+// Mientras tanto: tocar una celda la suma o la quita; las letras (arriba) y los números (a la izquierda)
+// seleccionan columnas y filas enteras; la barra de abajo tiene las acciones. Atrás o «Listo» termina.
+const selUi = { range: false };
+const COPY_MODE_LABEL = { block: 'como bloque', list: 'como lista' };
+const copyModeDefault = () => (state.org.settings.cellCopyMode === 'list' ? 'list' : 'block');
+const isSelecting = () => !!(editor && !editor.isDestroyed && selState(editor));
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const undoQuiet = () => editor?.chain().undo().run();
+
+function hideSelBars() {
+  $('#sel-bar').hidden = true;
+  $('#sel-actions').hidden = true;
+  $('#view-editor').classList.remove('selecting');
+  drawSelHandles();
+}
+
+function beginSelection(hit = null) {
+  if (!editor || !editor.isEditable || $('#toolbar').hidden) return;
+  if (!startSelection(editor, hit)) return;
+  selUi.range = false;
+  // Se cierra el teclado: mientras se selecciona, tocar una celda no pone el cursor.
+  editor.view.dom.blur();
+  try { window.getSelection()?.removeAllRanges(); } catch { /* nada */ }
+  hideKeyboard();
+  haptic();
+  if (!localStorage.getItem('notas-sel-ayuda')) {
+    localStorage.setItem('notas-sel-ayuda', '1');
+    snackbar('Tocá celdas para sumarlas o quitarlas. Las letras y los números seleccionan columnas y filas enteras.');
+  }
+}
+function finishSelection() {
+  selUi.range = false;
+  if (editor && !editor.isDestroyed) endSelection(editor);
+  hideSelBars();
+}
+
+// Devuelve true si se está seleccionando (y deja las barras al día).
+function updateSelBars(ed) {
+  const info = ed && ed.isEditable && !$('#toolbar').hidden ? selectionInfo(ed) : null;
+  if (!info) {
+    if (!$('#sel-bar').hidden || $('#view-editor').classList.contains('selecting')) hideSelBars();
+    return false;
+  }
+  $('#sel-bar').hidden = false;
+  $('#sel-actions').hidden = false;
+  $('#view-editor').classList.add('selecting');
+  $('#sel-count').textContent = plural(info.count, 'celda', 'celdas');
+  const a = info.anchor;
+  $('#sel-row').textContent = a ? `Fila ${a.r + 1}` : 'Fila';
+  $('#sel-col').textContent = a ? `Columna ${colName(a.c)}` : 'Columna';
+  $('#sel-range').classList.toggle('on', selUi.range);
+  document.querySelectorAll('#sel-actions [data-sel]').forEach((b) => { b.disabled = !info.count; });
+  scheduleSelHandles();
+  return true;
+}
+
+// Letras de columna y números de fila alrededor de la tabla (como en una planilla), para tocar filas o columnas enteras.
+let handlesRaf = 0;
+function scheduleSelHandles() { cancelAnimationFrame(handlesRaf); handlesRaf = requestAnimationFrame(drawSelHandles); }
+function drawSelHandles() {
+  const layer = $('#sel-handles');
+  const s = editor && !editor.isDestroyed && !$('#sel-bar').hidden ? selState(editor) : null;
+  let wrap = null;
+  try { wrap = s ? editor.view.nodeDOM(s.tablePos) : null; } catch { wrap = null; }
+  const tableEl = wrap?.querySelector ? wrap.querySelector('table') : null;
+  if (!s || !tableEl || !tableEl.rows.length) { layer.hidden = true; layer.innerHTML = ''; return; }
+  const info = selectionInfo(editor);
+  const full = { r: new Set(info.fullRows), c: new Set(info.fullCols) };
+  const part = { r: new Set(info.rows), c: new Set(info.cols) };
+  const base = layer.parentElement.getBoundingClientRect();
+  const vis = wrap.getBoundingClientRect();
+  const H = 26; const W = 32;
+  const rows = Array.from(tableEl.rows);
+  const tTop = rows[0].getBoundingClientRect().top;
+  const cols = [];
+  Array.from(rows[0].cells).forEach((cell) => {
+    const r = cell.getBoundingClientRect(); const n = cell.colSpan || 1;
+    for (let i = 0; i < n; i++) cols.push({ left: r.left + (r.width * i) / n, right: r.left + (r.width * (i + 1)) / n });
+  });
+  const cls = (kind, i) => (full[kind].has(i) ? ' on' : part[kind].has(i) ? ' part' : '');
+  const html = [];
+  const minLeft = vis.left + W + 4;
+  cols.forEach((cr, c) => {
+    const l = Math.max(cr.left, minLeft); const r = Math.min(cr.right, vis.right);
+    if (r - l < 14) return;
+    html.push(`<button class="sel-handle${cls('c', c)}" data-hcol="${c}" aria-label="Columna ${colName(c)}" style="left:${Math.round(l - base.left + 1)}px;top:${Math.round(tTop - base.top - H - 3)}px;width:${Math.round(r - l - 2)}px;height:${H}px">${colName(c)}</button>`);
+  });
+  rows.forEach((tr, i) => {
+    const rr = tr.getBoundingClientRect();
+    html.push(`<button class="sel-handle${cls('r', i)}" data-hrow="${i}" aria-label="Fila ${i + 1}" style="left:${Math.round(vis.left - base.left + 1)}px;top:${Math.round(rr.top - base.top + 1)}px;width:${W}px;height:${Math.max(18, Math.round(rr.height - 2))}px">${i + 1}</button>`);
+  });
+  const allOn = info.count === s.rows * s.cols;
+  html.push(`<button class="sel-handle corner${allOn ? ' on' : ''}" data-hall="1" aria-label="${allOn ? 'Quitar la selección' : 'Seleccionar toda la tabla'}" style="left:${Math.round(vis.left - base.left + 1)}px;top:${Math.round(tTop - base.top - H - 3)}px;width:${W}px;height:${H}px">${icon('selectAll')}</button>`);
+  layer.innerHTML = html.join('');
+  layer.hidden = false;
+}
+
+function selDoLine(kind, index) {
+  const s = selState(editor);
+  if (!s) return;
+  const hit = kind === 'row' ? { tablePos: s.tablePos, r: index, c: s.anchor?.c ?? 0 } : { tablePos: s.tablePos, r: s.anchor?.r ?? 0, c: index };
+  updateSelection(editor, kind, hit);
+  haptic();
+}
+
+async function selDoCopy(mode = copyModeDefault(), cut = false) {
+  const r = selCopy(editor, mode);
+  if (!r) { snackbar('No hay celdas seleccionadas'); return; }
+  const ok = await clipboardWrite(r.text);
+  const shape = mode === 'list' ? `como lista (${plural(r.h, 'renglón', 'renglones')})` : `como bloque (${plural(r.w, 'columna', 'columnas')} × ${plural(r.h, 'fila', 'filas')})`;
+  let msg = `${plural(r.count, cut ? 'celda cortada' : 'celda copiada', cut ? 'celdas cortadas' : 'celdas copiadas')} ${shape}`;
+  if (!ok) msg += '. No se pudo usar el portapapeles del sistema: se puede pegar dentro de ANote';
+  if (cut) { selClear(editor); snackbar(msg, 'Deshacer', undoQuiet); } else snackbar(msg);
+}
+
+async function selDoPaste(text) {
+  if (!isSelecting()) return;
+  if (!selectionInfo(editor).count) { snackbar('Primero seleccioná al menos una celda'); return; }
+  if (text === undefined) {
+    text = await clipboardRead();
+    if (text == null) { openPasteSheet(); return; }
+  }
+  if (text === '') {
+    if (!getCellClip()) { snackbar('El portapapeles está vacío'); return; }
+    text = null; // se pega lo último copiado en ANote
+  }
+  if (!editor || !isSelecting()) return;
+  const r = selPaste(editor, text);
+  if (!r.ok) {
+    snackbar(r.reason === 'merged' ? 'No se puede agrandar la tabla: tiene celdas combinadas' : 'No hay nada para pegar');
+    return;
+  }
+  const p = r.plan;
+  let msg;
+  if (p.mode === 'fill') msg = `Mismo valor pegado en ${plural(p.cells.length, 'celda', 'celdas')}`;
+  else if (p.mode === 'tile') msg = `Bloque repetido en ${plural(p.cells.length, 'celda', 'celdas')}`;
+  else if (p.mode === 'order') {
+    msg = `${plural(p.used, 'valor pegado', 'valores pegados')} en orden`;
+    if (p.total > p.used) msg += ` (sobraron ${p.total - p.used})`;
+    else if (p.targets > p.used) msg += ` (${plural(p.targets - p.used, 'celda quedó', 'celdas quedaron')} sin cambiar)`;
+  } else msg = `${plural(p.cells.length, 'celda pegada', 'celdas pegadas')}${r.grew ? ' (se agregaron filas o columnas)' : ''}`;
+  snackbar(msg, 'Deshacer', undoQuiet);
+}
+
+// Si no se puede leer el portapapeles (en la web, el navegador puede negarlo): se pega a mano en un cuadro.
+function openPasteSheet() {
+  const clip = getCellClip();
+  openSheet(`<h2 class="sheet-title">Pegar en la selección</h2>
+    <p class="sheet-text">No se pudo leer el portapapeles. Pegá acá lo que copiaste (Ctrl + V, o mantené apretado → Pegar) y tocá «Pegar».</p>
+    <textarea id="paste-box" class="paste-box" rows="5" spellcheck="false"></textarea>
+    <div class="sheet-actions">${clip ? `<button class="text-btn ripple" id="paste-clip">Lo copiado en ANote (${plural(clip.count, 'celda', 'celdas')})</button>` : ''}<span class="spacer"></span><button class="text-btn ripple" id="paste-cancel">Cancelar</button><button class="filled-btn ripple" id="paste-ok">Pegar</button></div>`, (body) => {
+    body.querySelector('#paste-cancel').addEventListener('click', closeOverlays);
+    body.querySelector('#paste-ok').addEventListener('click', () => {
+      const t = body.querySelector('#paste-box').value;
+      closeOverlays();
+      if (t) selDoPaste(t); else snackbar('No había nada para pegar');
+    });
+    body.querySelector('#paste-clip')?.addEventListener('click', () => { closeOverlays(); selDoPaste(null); });
+  });
+}
+
+function selDoMark(mark) {
+  const r = selToggleMark(editor, mark);
+  const name = { bold: 'Negrita', italic: 'Cursiva', underline: 'Subrayado' }[mark];
+  if (r === 'empty') snackbar('Las celdas seleccionadas no tienen texto');
+  else if (r) snackbar(`${name} ${r === 'added' ? 'aplicada' : 'quitada'} en la selección`);
+}
+
+function selDoClear() {
+  const n = selClear(editor);
+  if (n) snackbar(`Contenido borrado en ${plural(n, 'celda', 'celdas')}`, 'Deshacer', undoQuiet);
+  else snackbar('Las celdas seleccionadas ya estaban vacías');
+}
+
+function selDoDelete(kind) {
+  const info = selectionInfo(editor);
+  if (!info) return;
+  const list = kind === 'rows' ? info.rows : info.cols;
+  const r = selDeleteLines(editor, kind);
+  if (!r.ok) { if (r.reason === 'merged') snackbar('No se puede: la tabla tiene celdas combinadas'); return; }
+  hideSelBars();
+  const what = r.table ? 'Tabla eliminada (estaban todas seleccionadas)'
+    : kind === 'rows' ? `${list.length === 1 ? 'Fila' : 'Filas'} ${listText(list)} ${list.length === 1 ? 'eliminada' : 'eliminadas'}`
+      : `${list.length === 1 ? 'Columna' : 'Columnas'} ${listText(list, colName)} ${list.length === 1 ? 'eliminada' : 'eliminadas'}`;
+  snackbar(what, 'Deshacer', undoQuiet);
+}
+
+function deleteItems(info) {
+  if (!info.count) return [];
+  return [
+    { label: `− Eliminar ${info.rows.length === 1 ? 'la fila' : 'las filas'} ${listText(info.rows)}`, onClick: () => selDoDelete('rows') },
+    { label: `− Eliminar ${info.cols.length === 1 ? 'la columna' : 'las columnas'} ${listText(info.cols, colName)}`, onClick: () => selDoDelete('cols') },
+  ];
+}
+
+// Menú de la selección: al mantener apretada una celda (o clic derecho) mientras se selecciona, o desde «N celdas».
+function openSelMenu(anchor, fromPress = false) {
+  if (!isSelecting()) return;
+  if (fromPress) haptic();
+  const info = selectionInfo(editor);
+  const def = copyModeDefault(); const other = def === 'block' ? 'list' : 'block';
+  const has = info.count > 0;
+  const items = [
+    { label: `${icon('copy')} Copiar ${COPY_MODE_LABEL[def]}`, disabled: !has, onClick: () => selDoCopy(def) },
+    { label: `${icon('copy')} Copiar ${COPY_MODE_LABEL[other]}`, disabled: !has, onClick: () => selDoCopy(other) },
+    { label: `Cortar ${COPY_MODE_LABEL[def]}`, disabled: !has, onClick: () => selDoCopy(def, true) },
+    { label: 'Pegar', disabled: !has, onClick: () => selDoPaste() },
+    { divider: true },
+    { label: `${icon('palette')} Color de fondo y alineación…`, disabled: !has, onClick: () => openSelFormatSheet() },
+    { label: `${icon('bold')} Negrita`, disabled: !has, onClick: () => selDoMark('bold') },
+    { label: `${icon('italic')} Cursiva`, disabled: !has, onClick: () => selDoMark('italic') },
+    { label: `${icon('underline')} Subrayado`, disabled: !has, onClick: () => selDoMark('underline') },
+    { label: 'Borrar el contenido', disabled: !has, onClick: selDoClear },
+    { divider: true },
+    ...deleteItems(info),
+    ...(has ? [{ divider: true }] : []),
+    { label: 'Seleccionar toda la tabla', onClick: () => updateSelection(editor, 'all') },
+    { label: 'Invertir la selección', onClick: () => updateSelection(editor, 'invert') },
+    { label: `${icon('settings')} Modo de copiado por defecto…`, onClick: showCopyModeSettings },
+    { divider: true },
+    { label: `${icon('check')} Terminar la selección`, onClick: finishSelection },
+  ];
+  openMenu(anchor, items);
+  $('#menu').classList.add('cell-menu');
+  if (fromPress) cellMenuAt = Date.now();
+}
+
+// Panel con color de fondo y alineación para las celdas seleccionadas.
+function openSelFormatSheet({ keepScroll = false } = {}) {
+  if (!isSelecting()) return;
+  const prev = $('#sheet').scrollTop;
+  const cur = selCommonAttrs(editor);
+  const n = selectionInfo(editor).count;
+  const hBtns = ALIGN_H.map((a) => `<button class="tool ripple${cur.align === a ? ' active' : ''}" data-align="${a}" aria-label="${H_LABEL[a]}" title="${H_LABEL[a]}">${icon(`align${a}`)}</button>`).join('');
+  const vBtns = ALIGN_V.map((a) => `<button class="tool ripple${cur.valign === a ? ' active' : ''}" data-valign="${a}" aria-label="${V_LABEL[a]}" title="${V_LABEL[a]}">${icon(`valign${a}`)}</button>`).join('');
+  const bgBtns = `<button class="tbl-swatch tbl-swatch-none ripple${cur.bg === null ? ' on' : ''}" data-bgset="" aria-label="Sin color" title="Sin color">${icon('block')}</button>`
+    + CELL_BG.map(([k, l]) => `<button class="tbl-swatch ripple${cur.bg === k ? ' on' : ''}" data-bg="${k}" data-bgset="${k}" aria-label="${l}" title="${l}">${cur.bg === k ? icon('check') : ''}</button>`).join('');
+  openSheet(`<h2 class="sheet-title">${icon('palette')} Selección <small class="ver">${plural(n, 'celda', 'celdas')}</small></h2>
+    <div class="tbl-group"><h3>Color de fondo</h3><div class="tbl-swatches" role="group" aria-label="Color de fondo">${bgBtns}</div></div>
+    <div class="tbl-group"><h3>Alineación</h3>
+      <div class="tbl-align-row"><span>Horizontal</span>${hBtns}</div>
+      <div class="tbl-align-row"><span>Vertical</span>${vBtns}</div>
+    </div>
+    <div class="sheet-actions"><span class="spacer"></span><button class="filled-btn ripple" id="self-ok">Listo</button></div>`, (body) => {
+    const again = () => requestAnimationFrame(() => openSelFormatSheet({ keepScroll: true }));
+    body.querySelectorAll('[data-bgset]').forEach((b) => b.addEventListener('click', () => {
+      const k = b.dataset.bgset || null;
+      selApplyAttrs(editor, { bg: k }); again();
+      snackbar(k ? `Fondo ${BG_LABEL[k].toLowerCase()} en la selección` : 'Selección sin color de fondo');
+    }));
+    body.querySelectorAll('[data-align]').forEach((b) => b.addEventListener('click', () => { selApplyAttrs(editor, { align: b.dataset.align }); again(); }));
+    body.querySelectorAll('[data-valign]').forEach((b) => b.addEventListener('click', () => { selApplyAttrs(editor, { valign: b.dataset.valign }); again(); }));
+    body.querySelector('#self-ok').addEventListener('click', closeOverlays);
+  });
+  if (keepScroll) $('#sheet').scrollTop = prev;
+}
+
+// Ajuste: cómo se copia por defecto (también se puede elegir en el momento, desde el menú de la selección).
+function showCopyModeSettings() {
+  const cur = copyModeDefault();
+  const opts = [
+    ['block', 'Como bloque', 'Se copian como en una planilla: las filas y columnas que tienen algo seleccionado, una al lado de la otra (las que no tienen nada se saltean). Las celdas sin seleccionar dentro del bloque quedan vacías. Ej.: A1 y C3 → un bloque de 2 × 2 con dos huecos.'],
+    ['list', 'Como lista', 'Un valor por renglón, en orden de lectura (fila por fila, de izquierda a derecha). Ej.: A1 y C3 → dos renglones.'],
+  ];
+  openSheet(`<h2 class="sheet-title">Copiar celdas</h2>
+    <p class="sheet-text">Cómo se copian por defecto las celdas seleccionadas. Desde el menú de la selección siempre podés elegir el otro modo en el momento.</p>
+    <div class="picker-list">${opts.map(([k, l, d]) => `<button class="picker-item ripple copy-mode" data-mode="${k}"><span class="radio${k === cur ? ' on' : ''}"></span><span><strong>${l}</strong><br><small>${d}</small></span></button>`).join('')}</div>`, (body) => {
+    body.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => {
+      const mode = b.dataset.mode;
+      state.repo.saveSettings({ cellCopyMode: mode });
+      state.org.settings.cellCopyMode = mode;
+      body.querySelectorAll('[data-mode]').forEach((x) => x.querySelector('.radio').classList.toggle('on', x.dataset.mode === mode));
+      renderDrawer();
+      snackbar(`Las celdas se copian ${COPY_MODE_LABEL[mode]}`);
+    }));
+  });
+}
+
+function overlayOpen() { return !$('#menu').hidden || $('#sheet').classList.contains('open') || !$('#dialog').hidden; }
+
+function bindSelection() {
+  const host = $('#editor');
+  let tap = null;
+  // pointerdown + preventDefault: tocar una celda no pone el cursor ni abre el teclado (sí se puede desplazar).
+  host.addEventListener('pointerdown', (e) => {
+    tap = null;
+    if (!editor || !editor.isEditable || $('#toolbar').hidden) return;
+    const cellEl = e.target.closest?.('td, th');
+    if (!isSelecting()) {
+      // PC: Ctrl + clic en una celda empieza a seleccionar (con la celda del cursor y la tocada).
+      if (!cellEl || !(e.ctrlKey || e.metaKey) || e.button !== 0) return;
+      const hit = cellAtDom(editor, cellEl);
+      if (!hit) return;
+      e.preventDefault(); e.stopPropagation();
+      const ctx = tableContext(editor.state);
+      if (ctx && ctx.tablePos === hit.tablePos && ctx.cellPos != null) {
+        beginSelection();
+        if (ctx.rect.top !== hit.r || ctx.rect.left !== hit.c) updateSelection(editor, 'toggle', hit);
+      } else beginSelection(hit);
+      tap = { skip: true };
+      return;
+    }
+    if (!cellEl) {
+      if (e.target.closest?.('.tbl-selecting')) e.preventDefault(); // borde de la tabla: no hace nada
+      else finishSelection(); // tocar fuera de la tabla termina la selección (y pone el cursor ahí)
+      return;
+    }
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    tap = { cellEl, shift: e.shiftKey };
+  }, true);
+  host.addEventListener('mousedown', (e) => {
+    if (isSelecting() && e.target.closest?.('.tbl-selecting')) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+  host.addEventListener('click', (e) => {
+    const t = tap; tap = null;
+    if (!t) return;
+    e.preventDefault(); e.stopPropagation();
+    if (t.skip || !isSelecting()) return;
+    const hit = cellAtDom(editor, t.cellEl);
+    if (!hit) return;
+    const op = (t.shift || selUi.range) ? 'range' : 'toggle';
+    selUi.range = false;
+    updateSelection(editor, op, hit);
+  }, true);
+  // Por las dudas: si el editor recibe el foco mientras se selecciona, se lo saca (así no se abre el teclado).
+  host.addEventListener('focusin', () => {
+    if (!isSelecting()) return;
+    editor.view.dom.blur();
+    hideKeyboard();
+  });
+  // Las letras y los números se vuelven a ubicar al desplazar la tabla de costado o al cambiar el tamaño.
+  host.addEventListener('scroll', () => { if (isSelecting()) scheduleSelHandles(); }, true);
+  window.addEventListener('resize', () => { if (isSelecting()) scheduleSelHandles(); });
+  window.addEventListener('kbchange', () => { if (isSelecting()) scheduleSelHandles(); });
+
+  const handles = $('#sel-handles');
+  handles.addEventListener('pointerdown', (e) => e.preventDefault());
+  handles.addEventListener('click', (e) => {
+    const b = e.target.closest('.sel-handle');
+    if (!b || !isSelecting()) return;
+    if (b.dataset.hcol != null) selDoLine('col', +b.dataset.hcol);
+    else if (b.dataset.hrow != null) selDoLine('row', +b.dataset.hrow);
+    else if (b.dataset.hall) { const s = selState(editor); updateSelection(editor, s.cells.size === s.rows * s.cols ? 'none' : 'all'); haptic(); }
+  });
+
+  // Barras de la selección
+  document.querySelectorAll('#sel-bar [data-sel], #sel-actions [data-sel]').forEach((b) => {
+    b.addEventListener('pointerdown', (e) => e.preventDefault());
+    b.addEventListener('click', () => {
+      if (!isSelecting()) return;
+      const cmd = b.dataset.sel;
+      const s = selState(editor);
+      switch (cmd) {
+        case 'menu': openSelMenu(b); break;
+        case 'done': finishSelection(); break;
+        case 'row': if (s.anchor) selDoLine('row', s.anchor.r); else snackbar('Tocá primero una celda de la fila'); break;
+        case 'col': if (s.anchor) selDoLine('col', s.anchor.c); else snackbar('Tocá primero una celda de la columna'); break;
+        case 'range':
+          selUi.range = !selUi.range;
+          b.classList.toggle('on', selUi.range);
+          if (selUi.range) snackbar(s.anchor ? `Tocá otra celda: se selecciona el rectángulo desde ${colName(s.anchor.c)}${s.anchor.r + 1}` : 'Tocá dos celdas: se selecciona el rectángulo entre ellas');
+          break;
+        case 'all': case 'invert': case 'none': updateSelection(editor, cmd); break;
+        case 'copy': selDoCopy(); break;
+        case 'cut': selDoCopy(copyModeDefault(), true); break;
+        case 'paste': selDoPaste(); break;
+        case 'format': openSelFormatSheet(); break;
+        case 'bold': case 'italic': case 'underline': selDoMark(cmd); break;
+        case 'clear': selDoClear(); break;
+        case 'delete': {
+          const items = deleteItems(selectionInfo(editor));
+          if (items.length) openMenu(b, items);
+          break;
+        }
+        default: break;
+      }
+    });
+  });
+
+  // PC: atajos de teclado mientras se selecciona.
+  const typing = (t) => t && t.closest?.('input, textarea, select');
+  let pasteWait = null;
+  document.addEventListener('keydown', (e) => {
+    if (state.view !== 'editor' || !isSelecting() || overlayOpen() || typing(e.target)) return;
+    const k = e.key; const mod = e.ctrlKey || e.metaKey;
+    if (k === 'Escape') { e.preventDefault(); finishSelection(); return; }
+    if ((k === 'Delete' || k === 'Backspace') && !mod) { e.preventDefault(); selDoClear(); return; }
+    if (!mod) return;
+    const l = k.toLowerCase();
+    if (l === 'a') { e.preventDefault(); updateSelection(editor, 'all'); return; }
+    if (l === 'c') { e.preventDefault(); selDoCopy(); return; }
+    if (l === 'x') { e.preventDefault(); selDoCopy(copyModeDefault(), true); return; }
+    if (l === 'b' || l === 'i' || l === 'u') { e.preventDefault(); selDoMark({ b: 'bold', i: 'italic', u: 'underline' }[l]); return; }
+    // Ctrl + V: se usa el evento "paste" (trae el texto sin pedir permiso); si no llega, se lee el portapapeles.
+    if (l === 'v') { clearTimeout(pasteWait); pasteWait = setTimeout(() => { pasteWait = null; selDoPaste(); }, 250); }
+  });
+  document.addEventListener('paste', (e) => {
+    if (state.view !== 'editor' || !isSelecting() || overlayOpen() || typing(e.target)) return;
+    clearTimeout(pasteWait); pasteWait = null;
+    e.preventDefault();
+    selDoPaste(e.clipboardData ? e.clipboardData.getData('text/plain') : undefined);
+  });
+  // Escribir el título termina la selección.
+  $('#note-title').addEventListener('focus', () => { if (isSelecting()) finishSelection(); });
 }
 
 /* ---------- Acciones del editor ---------- */
 function bindEditorUi() {
   bindTableBar();
   bindCellPress();
+  bindSelection();
   // Tocar debajo de una tabla (o imagen) que está al final de la nota, o entre el título y una que está al principio:
   // renglón nuevo con el cursor y el teclado.
   $('#editor-scroll').addEventListener('click', (e) => {
@@ -1581,6 +2011,7 @@ function renderDrawer() {
     <div class="drawer-divider"></div>
     <div class="drawer-item"><button class="drawer-link ripple" id="drawer-settings">${icon('settings')}<span class="drawer-label">Plazo de la papelera</span></button></div>
     <div class="drawer-item"><button class="drawer-link ripple" id="drawer-autotitle">${icon('title')}<span class="drawer-label">Título automático${state.org.settings.autoTitleOn ? ' (activado)' : ''}</span></button></div>
+    <div class="drawer-item"><button class="drawer-link ripple" id="drawer-copymode">${icon('copy')}<span class="drawer-label">Copiar celdas de tablas: ${COPY_MODE_LABEL[copyModeDefault()]}</span></button></div>
   `;
   $('#drawer-body').querySelectorAll('[data-kind]').forEach((b) => b.addEventListener('click', () => {
     setFilter(b.dataset.id ? { kind: b.dataset.kind, id: b.dataset.id } : { kind: b.dataset.kind });
@@ -1597,6 +2028,7 @@ function renderDrawer() {
   $('#drawer-hidden').addEventListener('click', () => { closeOverlays(); showHiddenManager(); });
   $('#drawer-settings').addEventListener('click', () => { closeOverlays(); showTrashSettings(); });
   $('#drawer-autotitle').addEventListener('click', () => { closeOverlays(); showAutoTitleSettings(); });
+  $('#drawer-copymode').addEventListener('click', () => { closeOverlays(); showCopyModeSettings(); });
 }
 
 /* ---------- Carpetas ---------- */

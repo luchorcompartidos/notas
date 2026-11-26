@@ -111,3 +111,36 @@ export async function nativeGet(url) {
   });
   return typeof res.data === 'string' ? res.data : '';
 }
+
+/* ---------- Portapapeles del sistema (copiar y pegar celdas de tablas) ---------- */
+// En el APK se usa el plugin propio "Portapapeles": la WebView no deja leer el portapapeles desde JavaScript.
+const Portapapeles = registerPlugin('Portapapeles');
+
+export async function clipboardWrite(text) {
+  if (isNative) {
+    try { await Portapapeles.escribir({ texto: text }); return true; } catch { /* se prueba lo de la web */ }
+  }
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* sin permiso */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch { return false; }
+}
+
+// Texto del portapapeles, o null si no se puede leer (en la web, el navegador puede pedir permiso o negarlo).
+export async function clipboardRead() {
+  if (isNative) {
+    try { const r = await Portapapeles.leer(); return r?.texto ?? ''; } catch { /* se prueba lo de la web */ }
+  }
+  try { return await navigator.clipboard.readText(); } catch { return null; }
+}
+
+// Cierra el teclado (al empezar a seleccionar celdas).
+export function hideKeyboard() {
+  if (isNative) safe(Keyboard.hide());
+}

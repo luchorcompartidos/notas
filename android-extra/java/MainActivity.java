@@ -10,6 +10,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(IntentBridgePlugin.class);
         // Plugin propio: huella / bloqueo de pantalla para notas bloqueadas
         registerPlugin(BiometricPlugin.class);
+        // Plugin propio: leer y escribir el portapapeles del sistema (copiar y pegar celdas de tablas)
+        registerPlugin(PortapapelesPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }
