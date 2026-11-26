@@ -11,7 +11,7 @@ import Table from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
-import { TableMap, CellSelection } from '@tiptap/pm/tables';
+import { TableMap, CellSelection, addRow, addColumn, removeRow, removeColumn } from '@tiptap/pm/tables';
 import { ySyncPluginKey } from 'y-prosemirror';
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -383,13 +383,22 @@ function domAt(editor, pos) {
   try { const d = editor.view.nodeDOM(pos); return d && d.nodeType === 1 ? d : null; } catch { return null; }
 }
 // Ancho que se ve hoy de la columna col (medido en pantalla).
+// Con celdas combinadas (v0.3.8): se mide en una fila donde la columna tenga una celda propia (no combinada a lo
+// ancho); si en todas está combinada, vale el ancho guardado de esa columna antes que el promedio.
 function measureCol(editor, ctx, col, row = ctx.rect.top) {
-  const p = ctx.map.map[row * ctx.map.width + col];
-  const cell = ctx.table.nodeAt(p);
+  const { map, table } = ctx;
+  const at = (r) => map.map[r * map.width + col];
+  let rr = row;
+  if ((table.nodeAt(at(rr))?.attrs.colspan || 1) > 1) {
+    for (let r = 0; r < map.height; r++) if ((table.nodeAt(at(r))?.attrs.colspan || 1) === 1) { rr = r; break; }
+  }
+  const p = at(rr);
+  const cell = table.nodeAt(p);
+  const span = cell?.attrs.colspan || 1;
   const el = domAt(editor, ctx.tableStart + p);
-  const w = el ? el.offsetWidth / (cell?.attrs.colspan || 1) : 0;
-  const attr = cell?.attrs.colwidth?.[cell.attrs.colspan === 1 ? 0 : col - ctx.map.colCount(p)];
-  return Math.round(w || attr || CELL_MIN);
+  const w = el ? el.offsetWidth / span : 0;
+  const attr = cell?.attrs.colwidth?.[col - map.colCount(p)];
+  return Math.round((span > 1 && attr) || w || attr || CELL_MIN);
 }
 function measureRow(editor, ctx, r) {
   const el = domAt(editor, rowPos(ctx, r));
@@ -501,61 +510,131 @@ export function copyTablePart(editor, kind) {
     const p = kind === 'row' ? map.map[rect.top * map.width + i] : map.map[i * map.width + rect.left];
     if (seen.has(p)) { cells.push(null); continue; } // parte de una celda combinada: va vacía
     seen.add(p);
+    // Una combinada que empieza en otra fila (o columna) tiene su contenido allá: acá va vacía (como Excel; v0.3.8).
+    const cr = map.findCell(p);
+    if ((kind === 'row' ? cr.top !== rect.top : cr.left !== rect.left)) { cells.push(null); continue; }
     cells.push(table.nodeAt(p).toJSON());
   }
   tableClip = {
     kind, cells,
     index: (kind === 'row' ? rect.top : rect.left) + 1,
     rowAttrs: kind === 'row' ? { ...table.child(rect.top).attrs } : null,
+    width: kind === 'col' ? columnWidths(table, map)[rect.left] || null : null,
   };
   return tableClip;
 }
 
-// Arma una celda nueva con el contenido copiado (o vacía) y el tipo/ancho del lugar donde va.
-function makeCell(schema, json, type, colwidth) {
-  let content = null; let align = null; let valign = null; let bg = null;
-  if (json) {
-    try {
-      const src = schema.nodeFromJSON(json);
-      content = src.content; align = src.attrs.align || null; valign = src.attrs.valign || null; bg = src.attrs.bg || null;
-    } catch { content = null; }
+// Ancho guardado de cada columna (0 si no tiene): el de la primera celda que la cubre con ancho.
+function columnWidths(table, map) {
+  const out = new Array(map.width).fill(0);
+  for (let c = 0; c < map.width; c++) {
+    for (let r = 0; r < map.height; r++) {
+      const rel = map.map[r * map.width + c];
+      const v = table.nodeAt(rel).attrs.colwidth?.[c - map.colCount(rel)];
+      if (v > 0) { out[c] = v; break; }
+    }
   }
-  const attrs = { colspan: 1, rowspan: 1, colwidth: colwidth || null, align, valign, bg };
-  return (content && content.size ? type.create(attrs, content) : null) || type.createAndFill(attrs);
+  return out;
+}
+const tableManual = (table) => {
+  let m = false;
+  table.descendants((c) => { if (c.attrs.colwidth?.some((w) => w > 0)) m = true; return c.type.name === 'tableRow'; });
+  return m && table.attrs.colMode !== 'auto';
+};
+// La tabla en tablePos como el "rect" de prosemirror-tables (addRow, removeRow, …), leída del documento actual.
+function tableRectAt(doc, tablePos) {
+  const table = doc.nodeAt(tablePos);
+  const map = TableMap.get(table);
+  return { table, map, tableStart: tablePos + 1, left: 0, top: 0, right: map.width, bottom: map.height };
+}
+// Una casilla que es una celda sola (1 × 1) en la posición (r, c).
+const soloAt = (map, r, c) => {
+  const cr = map.findCell(map.map[r * map.width + c]);
+  return cr.top === r && cr.left === c && cr.bottom === r + 1 && cr.right === c + 1;
+};
+
+// Pone en celdas ya creadas (posiciones relativas a la tabla) el contenido y el formato copiados (JSON de una celda).
+// El tipo y el ancho de la celda de destino no cambian, salvo `colwidth` si se indica.
+function fillCells(tr, tablePos, jobs, schema) {
+  jobs.slice().sort((a, b) => b.rel - a.rel).forEach(({ rel, json, colwidth }) => {
+    const pos = tablePos + 1 + rel;
+    const cell = tr.doc.nodeAt(pos);
+    if (!cell) return;
+    let content = null; let fmt = {};
+    if (json) {
+      try {
+        const src = schema.nodeFromJSON(json);
+        content = src.content;
+        fmt = { align: src.attrs.align || null, valign: src.attrs.valign || null, bg: src.attrs.bg || null };
+      } catch { content = null; }
+    }
+    const attrs = { ...cell.attrs, ...fmt };
+    if (colwidth !== undefined) attrs.colwidth = colwidth;
+    tr.setNodeMarkup(pos, null, attrs);
+    if (content && content.size) tr.replaceWith(pos + 1, pos + cell.nodeSize - 1, content);
+  });
 }
 
 // Inserta la fila o columna copiada arriba/abajo (fila) o a la izquierda/derecha (columna) de la celda actual.
+// Desde la v0.3.8 primero se agrega la fila o columna vacía con addRow/addColumn de prosemirror-tables (agrandan las
+// celdas combinadas que cruza) y después se llenan las celdas nuevas. Si la nueva cae dentro de una combinada, esa
+// casilla no existe (la ocupa la combinada) y su contenido se descarta. Las combinadas a lo ancho de la fila copiada
+// (o a lo alto de la columna copiada) se vuelven a combinar, si las casillas de destino están libres.
 export function insertCopied(editor, where, { focus = true } = {}) {
   const st = editor.state;
   const ctx = tableContext(st);
   if (!ctx || !tableClip) return false;
-  const { map, table, tableStart, rect } = ctx;
+  const { map, table, tableStart, rect, tablePos } = ctx;
   const s = st.schema;
+  const manual = tableManual(table);
   const tr = st.tr;
+  const R0 = { table, map, tableStart, left: 0, top: 0, right: map.width, bottom: map.height };
+  const jobs = []; const spans = [];
   if (tableClip.kind === 'row') {
-    const ref = where === 'before' ? rect.top : rect.bottom - 1;
+    const widths = columnWidths(table, map);
     const target = where === 'before' ? rect.top : rect.bottom;
-    const cells = [];
-    for (let c = 0; c < map.width; c++) {
-      const refCell = table.nodeAt(map.map[ref * map.width + c]);
-      const type = c === 0 && ctx.headerCol ? s.nodes.tableHeader : s.nodes.tableCell;
-      const cw = refCell.attrs.colspan === 1 ? refCell.attrs.colwidth : null;
-      cells.push(makeCell(s, tableClip.cells[c], type, cw));
+    addRow(tr, R0, target);
+    const t = tr.doc.nodeAt(tablePos);
+    const m = TableMap.get(t);
+    for (let c = 0; c < m.width; c++) {
+      if (!soloAt(m, target, c)) continue;
+      const rel = m.map[target * m.width + c];
+      const cr = m.findCell(rel);
+      if (cr.top !== target) continue;
+      const json = tableClip.cells[c] || null;
+      jobs.push({ rel, json, colwidth: manual && widths[c] ? [widths[c]] : null });
+      const span = json?.attrs?.colspan > 1 ? json.attrs.colspan : 1;
+      if (span > 1) spans.push({ top: target, bottom: target, left: c, right: Math.min(m.width - 1, c + span - 1) });
     }
-    const rowAttrs = { ...(tableClip.rowAttrs || {}) };
-    tr.insert(rowPos(ctx, target), s.nodes.tableRow.create(rowAttrs, cells));
+    const h = tableClip.rowAttrs?.height || null;
+    let rp = tablePos + 1;
+    for (let i = 0; i < target; i++) rp += t.child(i).nodeSize;
+    if (h) tr.setNodeMarkup(rp, null, { ...t.child(target).attrs, height: h });
   } else {
-    const t = where === 'before' ? rect.left : rect.right;
-    // El ancho copiado se usa solo si la tabla de destino ya tiene anchos manuales.
-    let manual = false;
-    table.descendants((c) => { if (c.attrs.colwidth?.some((w) => w > 0)) manual = true; return c.type.name === 'tableRow'; });
-    manual = manual && table.attrs.colMode !== 'auto';
-    for (let r = map.height - 1; r >= 0; r--) {
-      const type = r === 0 && ctx.headerRow ? s.nodes.tableHeader : s.nodes.tableCell;
-      const json = tableClip.cells[r];
-      const cw = manual && json?.attrs?.colwidth?.[0] ? [json.attrs.colwidth[0]] : null;
-      tr.insert(tableStart + map.positionAt(r, t, table), makeCell(s, json, type, cw));
+    const t0 = where === 'before' ? rect.left : rect.right;
+    addColumn(tr, R0, t0);
+    const t = tr.doc.nodeAt(tablePos);
+    const m = TableMap.get(t);
+    for (let r = 0; r < m.height; r++) {
+      if (!soloAt(m, r, t0)) continue;
+      const rel = m.map[r * m.width + t0];
+      const json = tableClip.cells[r] || null;
+      jobs.push({ rel, json, colwidth: null });
+      const span = json?.attrs?.rowspan > 1 ? json.attrs.rowspan : 1;
+      if (span > 1) spans.push({ left: t0, right: t0, top: r, bottom: Math.min(m.height - 1, r + span - 1) });
     }
+  }
+  fillCells(tr, tablePos, jobs, s);
+  // Combinadas de lo copiado: solo si todas las casillas de destino son celdas sueltas.
+  spans.forEach((R) => {
+    const m = TableMap.get(tr.doc.nodeAt(tablePos));
+    for (let r = R.top; r <= R.bottom; r++) for (let c = R.left; c <= R.right; c++) if (!soloAt(m, r, c)) return;
+    mergeRectTr(tr, tablePos, R);
+  });
+  // Columna nueva en una tabla con anchos manuales: el ancho copiado (o uno por defecto), también en las combinadas que cruza.
+  if (tableClip.kind === 'col' && manual) {
+    const x = tableRectAt(tr.doc, tablePos);
+    setColAttr(tr, x, where === 'before' ? rect.left : rect.right, tableClip.width || CELL_MIN * 2);
   }
   editor.view.dispatch(tr.scrollIntoView());
   if (focus) editor.view.focus();
@@ -598,15 +677,17 @@ const compareText = (a, b) => {
 
 // Ordena las filas de la tabla por la columna del cursor. dir: 'asc' | 'desc'; kind: 'text' | 'number'.
 // La fila de encabezado (si la hay) no se mueve. Las celdas vacías (o sin número) van siempre al final.
-// Devuelve { ok, moved, reason } (reason: 'merged' si hay celdas combinadas, 'few' si hay menos de 2 filas para ordenar).
+// Devuelve { ok, moved, reason } (reason: 'mergedV' si hay celdas combinadas a lo alto, 'few' si hay menos de 2 filas para ordenar).
 export function sortTable(editor, dir = 'asc', kind = 'text', { focus = false } = {}) {
   const st = editor.state;
   const ctx = tableContext(st);
   if (!ctx) return { ok: false, reason: 'none' };
   const { table, map, tablePos, rect } = ctx;
-  let merged = false;
-  table.descendants((c) => { if (c.attrs.colspan > 1 || c.attrs.rowspan > 1) merged = true; return c.type.name === 'tableRow'; });
-  if (merged) return { ok: false, reason: 'merged' };
+  // Con celdas combinadas (v0.3.8): se ordena si son solo a lo ancho (cada fila se mueve entera, con sus combinadas);
+  // si hay alguna a lo alto (abarca varias filas), no.
+  let vertical = false;
+  table.descendants((c) => { if (c.attrs.rowspan > 1) vertical = true; return c.type.name === 'tableRow'; });
+  if (vertical) return { ok: false, reason: 'mergedV' };
   const col = rect.left;
   const first = ctx.headerRow ? 1 : 0;
   const rows = [];
@@ -660,11 +741,6 @@ export function placeCursorAt(editor, x, y) {
 // de una tabla, que se marca en pantalla con decoraciones. No toca la nota: no se guarda ni se sincroniza.
 const selKey = new PluginKey('seleccionCeldas');
 const tableAt = (doc, pos) => { const n = pos == null ? null : doc.nodeAt(pos); return n && n.type.name === 'table' ? n : null; };
-const hasMerged = (table) => {
-  let m = false;
-  table.descendants((c) => { if (c.attrs.colspan > 1 || c.attrs.rowspan > 1) m = true; return c.type.name === 'tableRow'; });
-  return m;
-};
 
 const SeleccionCeldas = Extension.create({
   name: 'seleccionCeldas',
@@ -916,7 +992,8 @@ export function selCopy(editor, mode = 'block') {
   return { text, mode, count, h: cellClip.h, w: cellClip.w };
 }
 
-// Agrega columnas a la derecha y filas abajo hasta llegar a rows × cols.
+// Agrega columnas a la derecha y filas abajo hasta llegar a rows × cols. Sirve también con celdas combinadas (v0.3.8):
+// las celdas que se agregan al final de cada fila caen en las primeras casillas libres, después de las tapadas.
 function growTable(tr, tablePos, rows, cols, schema) {
   let table = tr.doc.nodeAt(tablePos);
   let map = TableMap.get(table);
@@ -941,11 +1018,12 @@ function growTable(tr, tablePos, rows, cols, schema) {
     table.forEach((row) => { if (row.firstChild?.type.name !== 'tableHeader') headerCol = false; });
     const last = table.lastChild;
     const newRows = [];
+    // Cada celda nueva, con el ancho guardado de su columna (también si arriba hay una combinada; v0.3.8).
+    const widths = columnWidths(table, map);
     for (let r = map.height; r < rows; r++) {
       const cells = [];
       for (let c = 0; c < map.width; c++) {
-        const ref = table.nodeAt(map.map[(map.height - 1) * map.width + c]);
-        const cw = ref && ref.attrs.colspan === 1 ? ref.attrs.colwidth : null;
+        const cw = widths[c] ? [widths[c]] : null;
         cells.push((c === 0 && headerCol ? schema.nodes.tableHeader : schema.nodes.tableCell).createAndFill({ colwidth: cw }));
       }
       newRows.push(schema.nodes.tableRow.create({ ...last.attrs, height: null }, cells));
@@ -955,7 +1033,7 @@ function growTable(tr, tablePos, rows, cols, schema) {
 }
 
 // Pega sobre la selección. text = lo que hay en el portapapeles del sistema (null = usar lo copiado en ANote).
-// Devuelve { ok, reason?, plan } (reason: 'empty' | 'merged').
+// Devuelve { ok, reason?, plan, grew, fromClip, skipped } (reason: 'empty' | 'nosel').
 export function selPaste(editor, text) {
   const s = selState(editor);
   if (!s || !s.cells.size) return { ok: false, reason: 'nosel' };
@@ -973,7 +1051,6 @@ export function selPaste(editor, text) {
   const tr = editor.state.tr;
   let grew = false;
   if (plan.rows > s.rows || plan.cols > s.cols) {
-    if (hasMerged(s.table)) return { ok: false, reason: 'merged', plan };
     growTable(tr, s.tablePos, plan.rows, plan.cols, schema);
     grew = true;
   }
@@ -1021,10 +1098,10 @@ export function selPaste(editor, text) {
 }
 
 // Elimina las filas ('rows') o columnas ('cols') que toca la selección. Si son todas, elimina la tabla.
+// También con celdas combinadas (v0.3.8).
 export function selDeleteLines(editor, kind) {
   const s = selState(editor);
   if (!s || !s.cells.size) return { ok: false };
-  if (hasMerged(s.table)) return { ok: false, reason: 'merged' };
   const info = Sel.lines(s.cells, s.rows, s.cols);
   const list = kind === 'rows' ? info.rows : info.cols;
   const total = kind === 'rows' ? s.rows : s.cols;
@@ -1035,16 +1112,10 @@ export function selDeleteLines(editor, kind) {
     editor.view.dispatch(tr);
     return { ok: true, table: true, list };
   }
-  if (kind === 'rows') {
-    const starts = []; let p = s.tablePos + 1;
-    for (let r = 0; r < s.table.childCount; r++) { starts.push(p); p += s.table.child(r).nodeSize; }
-    list.slice().sort((a, b) => b - a).forEach((r) => tr.delete(starts[r], starts[r] + s.table.child(r).nodeSize));
-  } else {
-    const start = s.tablePos + 1;
-    const del = [];
-    list.forEach((c) => { for (let r = 0; r < s.rows; r++) { const p = start + s.map.map[r * s.cols + c]; del.push([p, p + s.table.nodeAt(p - start).nodeSize]); } });
-    del.sort((a, b) => b[0] - a[0]).forEach(([a, b]) => tr.delete(a, b));
-  }
+  // Desde la v0.3.8, con removeRow/removeColumn de prosemirror-tables, de la última a la primera y releyendo la tabla
+  // cada vez: una celda combinada que cruza la fila o columna se achica (si empieza en la fila borrada, baja a la siguiente).
+  const fn = kind === 'rows' ? removeRow : removeColumn;
+  list.slice().sort((a, b) => b - a).forEach((i) => fn(tr, tableRectAt(tr.doc, s.tablePos), i));
   // El cursor queda en la tabla (al principio de la primera celda).
   const t = tr.doc.nodeAt(s.tablePos);
   if (t) tr.setSelection(TextSelection.near(tr.doc.resolve(s.tablePos + 2)));

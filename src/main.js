@@ -1274,7 +1274,7 @@ function doSort(cmd) {
   const [dir, kind, label] = SORT_CMDS[cmd];
   const col = tableContext(editor.state)?.col;
   const r = sortTable(editor, dir, kind);
-  if (r.reason === 'merged') snackbar('No se puede ordenar: la tabla tiene celdas combinadas');
+  if (r.reason === 'mergedV') snackbar('No se puede ordenar: hay celdas combinadas que abarcan varias filas (separalas primero)');
   else if (r.reason === 'few') snackbar('No hay filas suficientes para ordenar');
   else if (r.ok && !r.moved) snackbar('La tabla ya estaba en ese orden');
   else if (r.ok) snackbar(`Filas ordenadas por la columna ${col} (${label})`, 'Deshacer', () => editor?.chain().focus().undo().run());
@@ -1508,7 +1508,7 @@ async function selDoPaste(text) {
   if (!editor || !isSelecting()) return;
   const r = selPaste(editor, text);
   if (!r.ok) {
-    snackbar(r.reason === 'merged' ? 'No se puede agrandar la tabla: tiene celdas combinadas' : 'No hay nada para pegar');
+    snackbar('No hay nada para pegar');
     return;
   }
   const p = r.plan;
@@ -1573,7 +1573,7 @@ function selDoDelete(kind) {
   if (!info) return;
   const list = kind === 'rows' ? info.rows : info.cols;
   const r = selDeleteLines(editor, kind);
-  if (!r.ok) { if (r.reason === 'merged') snackbar('No se puede: la tabla tiene celdas combinadas'); return; }
+  if (!r.ok) return;
   hideSelBars();
   const what = r.table ? 'Tabla eliminada (estaban todas seleccionadas)'
     : kind === 'rows' ? `${list.length === 1 ? 'Fila' : 'Filas'} ${listText(list)} ${list.length === 1 ? 'eliminada' : 'eliminadas'}`

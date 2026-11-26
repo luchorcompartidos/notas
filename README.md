@@ -43,6 +43,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | — | v0.3.5 | **Tablas: anchos y altos al exportar**: el PDF y el docx respetan el ancho de las columnas (Automático según el contenido, Iguales o Manual, achicando si no entra en la hoja) y el alto mínimo de las filas |
 | — | v0.3.6 | **Tablas: arrastrar para seleccionar un rango**: con «Seleccionar», apoyar el dedo un instante en una celda y arrastrar marca el rectángulo (se suma a lo ya elegido); deslizar enseguida sigue desplazando la nota. Con el mouse, apretar y arrastrar. Cerca del borde, la nota y la tabla se desplazan solas |
 | — | v0.3.7 | **Tablas: combinar y separar celdas**: con «Seleccionar», marcar un rectángulo → «Combinar celdas» (junta el contenido de todas, como Word y Google Docs); «Separar celdas» desde el mismo menú, el menú de la celda o el panel de la tabla (las nuevas heredan color y alineación). En la PC, Ctrl + M. La selección toma las celdas combinadas enteras |
+| — | v0.3.8 | **Tablas: operaciones con celdas combinadas**: eliminar filas o columnas que cruzan una combinada (se achica), insertar o duplicar una fila o columna en medio de una combinada (se agranda; conserva las combinadas de lo copiado), pegar agrandando la tabla y ordenar si las combinadas son solo a lo ancho (con alguna a lo alto, avisa) |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web. Desde la v0.3.0 también se puede entrar con correo y contraseña propia de ANote (en la web y en el APK, sin plugin nativo).
 
