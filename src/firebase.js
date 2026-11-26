@@ -6,7 +6,7 @@ import {
   signInWithPopup, signInWithCredential, signOut, onAuthStateChanged, reauthenticateWithPopup,
   signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail,
   updateProfile, linkWithCredential, linkWithPopup, unlink, reauthenticateWithCredential, reload,
-  verifyBeforeUpdateEmail,
+  verifyBeforeUpdateEmail, updatePassword,
 } from 'firebase/auth';
 import { Capacitor } from '@capacitor/core';
 import {
@@ -159,6 +159,15 @@ async function reauthPassword(password) {
   await reauthenticateWithCredential(user, EmailAuthProvider.credential(passwordEmail(user) || norm(user.email), password));
   await user.getIdToken(true);
   return user;
+}
+
+// Cambiar la contraseña de ANote desde la app: se confirma la actual (reautenticar) y se pone la nueva.
+// Firebase renueva la sesión de este dispositivo y cierra las de los otros (al renovar su token, hasta 1 hora).
+export async function changePassword(current, next) {
+  const user = await reauthPassword(current);
+  await updatePassword(user, next);
+  await user.getIdToken(true);
+  return fb().auth.currentUser;
 }
 
 const securityRef = (uid) => doc(fb().db, 'security', uid);

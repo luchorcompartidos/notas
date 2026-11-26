@@ -1,11 +1,16 @@
 # Publica la web en GitHub Pages y compila el APK en cada push a main.
 # Versión (SemVer): poné [patch], [minor] o [major] en el mensaje del commit para crear una Release.
 # Sin marca: se publica la web y se compila un APK de prueba (artefacto), pero NO se crea Release.
+# Un push que solo cambia archivos .md (DESARROLLO.md, README.md) no corre este CI.
 name: CI
 
 on:
   push:
     branches: [main]
+    # Un push que solo cambia documentos (.md) no corre el CI: no hace falta
+    # publicar la web ni compilar el APK. Si hace falta, usar "Run workflow".
+    paths-ignore:
+      - '**.md'
   workflow_dispatch:
     inputs:
       bump:

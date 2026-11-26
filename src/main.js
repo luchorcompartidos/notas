@@ -33,7 +33,7 @@ import { yXmlFragmentToProsemirrorJSON } from 'y-prosemirror';
 import {
   fb, watchAuth, signInGoogle, signOutUser, authErrorMessage, errorDetail, reauthUser,
   signInEmail, signUpEmail, sendVerification, resetPassword, refreshUser, setDisplayName, linkPassword, unlinkPassword,
-  finishPasswordOnly, relinkGoogle, googleSessionBlocked, passwordProblem, hasGoogle, hasPassword, passwordEmail, passwordVerified,
+  finishPasswordOnly, relinkGoogle, googleSessionBlocked, changePassword, passwordProblem, hasGoogle, hasPassword, passwordEmail, passwordVerified,
 } from './firebase.js';
 
 const $ = (s) => document.querySelector(s);
@@ -2299,7 +2299,6 @@ function showAccountSecurity() {
   } else {
     part = `<h3 class="sheet-sub">Contraseña propia de ANote</h3>
       <p class="sheet-text">Entrás con <strong>${esc(pe)}</strong> — ${ver ? 'verificado' : '<strong>sin verificar</strong>'}. La cuenta con contraseña tiene un solo factor: usá una contraseña que no uses en otro lado y, si podés, activá la verificación en 2 pasos en ese correo.</p>
-      <p class="sheet-text">Para cambiar la contraseña: cerrá sesión y usá «Olvidé mi contraseña».</p>
       <div class="sheet-actions sheet-actions-wrap">${ver ? '' : '<button class="text-btn ripple" id="sec-resend">Reenviar verificación</button><button class="text-btn ripple" id="sec-check">Ya lo verifiqué</button>'}
         <span class="spacer"></span><button class="text-btn ripple" id="sec-google">Volver a usar Google</button></div>`;
   }
@@ -2307,10 +2306,12 @@ function showAccountSecurity() {
     <p class="sheet-text"><strong>${esc(displayName(u))}</strong> · ${esc(accountKind(u))}</p>
     ${g ? securityTipHtml() : ''}
     ${part}
+    ${p ? `<div class="sheet-actions"><span class="spacer"></span><button class="text-btn ripple" id="sec-pw">${icon('lock')}<span>Cambiar la contraseña</span></button></div>` : ''}
     <div class="sheet-actions"><button class="text-btn ripple" id="sec-name">Cambiar el nombre visible</button>
       ${g ? `<span class="spacer"></span><button class="text-btn ripple" id="sec-tip">${state.org.settings.secTipOff ? 'Volver a mostrar el aviso al entrar' : 'No mostrar el aviso al entrar'}</button>` : ''}</div>`, (b) => {
     const on = (id, fn) => b.querySelector(`#${id}`)?.addEventListener('click', fn);
     on('sec-link', openLinkPasswordSheet);
+    on('sec-pw', openChangePasswordSheet);
     on('sec-resend', async () => { try { await sendVerification(); snackbar(`Correo reenviado a ${pe}`); } catch (e) { accountError(e, 'No se pudo reenviar'); } });
     on('sec-check', async () => { if (await checkVerified()) return; });
     on('sec-cancel', async () => {
@@ -2353,6 +2354,57 @@ function showAccountSecurity() {
       } catch (e) { accountError(e, 'No se pudo guardar el nombre'); }
     });
     on('sec-tip', () => { const off = !state.org.settings.secTipOff; state.repo.saveSettings({ secTipOff: off }); state.org.settings.secTipOff = off; showAccountSecurity(); });
+  });
+}
+
+// Cambiar la contraseña de ANote (cuenta con contraseña): la actual, la nueva y repetirla.
+function openChangePasswordSheet() {
+  const pe = passwordEmail(state.user);
+  openSheet(`<h2 class="sheet-title">Cambiar la contraseña</h2>
+    <div class="em-form">
+      <p class="sheet-text">Cuenta: <strong>${esc(pe)}</strong>. ${PW_RULES}</p>
+      <input type="email" autocomplete="username" value="${esc(pe)}" readonly hidden>
+      ${pwField('cp-old', 'Contraseña actual', 'current-password')}
+      ${pwField('cp-new', 'Contraseña nueva', 'new-password')}
+      ${pwField('cp-new2', 'Repetir la contraseña nueva', 'new-password')}
+      <p class="sheet-text">En este dispositivo seguís con la sesión abierta. En los otros, la sesión se cierra sola (puede tardar hasta una hora) y hay que entrar con la contraseña nueva.</p>
+      <div class="sheet-actions sheet-actions-wrap"><button class="text-btn ripple" id="cp-forgot">No me acuerdo de la actual</button><span class="spacer"></span>
+        <button class="text-btn ripple" id="cp-back">Volver</button><button class="filled-btn ripple" id="cp-ok">Cambiar</button></div>
+    </div>`, (b) => {
+    bindEyes(b);
+    const field = (id) => b.querySelector(`#${id}`);
+    const val = (id) => field(id).value;
+    b.querySelector('#cp-back').addEventListener('click', showAccountSecurity);
+    b.querySelector('#cp-forgot').addEventListener('click', async () => {
+      const ok = await openDialog({ title: '¿Mandar el correo para elegir otra?', text: `Te mandamos a ${pe} un correo con un link para elegir una contraseña nueva (puede caer en spam). Después entrá con esa contraseña.`, ok: 'Enviar el correo' });
+      if (!ok) return;
+      try { await resetPassword(pe); snackbar(`Correo enviado a ${pe}`); } catch (e) { accountError(e, 'No se pudo enviar el correo'); }
+    });
+    const ok = b.querySelector('#cp-ok');
+    const run = async () => {
+      if (!val('cp-old')) { snackbar('Falta la contraseña actual'); field('cp-old').focus(); return; }
+      const prob = passwordProblem(val('cp-new'), pe);
+      if (prob) { snackbar(prob); field('cp-new').focus(); return; }
+      if (val('cp-new') === val('cp-old')) { snackbar('La contraseña nueva tiene que ser distinta de la actual'); field('cp-new').focus(); return; }
+      if (val('cp-new') !== val('cp-new2')) { snackbar('Las contraseñas nuevas no coinciden'); field('cp-new2').focus(); return; }
+      ok.disabled = true;
+      snackbar('Cambiando la contraseña…');
+      try {
+        await changePassword(val('cp-old'), val('cp-new'));
+        state.user = fb().auth.currentUser;
+        b.querySelectorAll('input[type="password"], input[type="text"]').forEach((i) => { i.value = ''; });
+        hideSnack(); closeOverlays();
+        openSheet(`<h2 class="sheet-title">Contraseña cambiada</h2>
+          <p class="sheet-text">Desde ahora entrás con <strong>${esc(pe)}</strong> y la contraseña nueva. En los otros dispositivos la sesión se cierra sola (puede tardar hasta una hora) y hay que volver a entrar.</p>`);
+      } catch (e) {
+        if (['auth/invalid-credential', 'auth/wrong-password', 'auth/invalid-login-credentials'].includes(e?.code)) {
+          snackbar('La contraseña actual no es correcta'); field('cp-old').focus();
+        } else accountError(e, 'No se pudo cambiar la contraseña');
+      } finally { ok.disabled = false; }
+    };
+    ok.addEventListener('click', run);
+    b.querySelectorAll('input').forEach((inp) => inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); } }));
+    setTimeout(() => field('cp-old')?.focus(), 80);
   });
 }
 
