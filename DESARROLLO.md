@@ -4,7 +4,7 @@
 > Uso: *"Seguimos con ANote (repo notas), <pedido>. Leé `DESARROLLO.md` del repo luchorcompartidos/notas."*
 > Guía de dispositivos viejos: `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo **home** (no está en este repo; se lee con `git clone --depth 1 https://github.com/luchorcompartidos/home`).
 > Estructura según `plantilla/DESARROLLO.md` del repo home. Lo viejo va resumido en "Historial".
-> Al cerrar cada etapa: actualizar secciones 1, 2, 3 y 7, y subir el archivo al repo.
+> Al cerrar cada etapa: actualizar secciones 1, 2, 3 y 7, y subir el archivo al repo. Además, revisar si lo hecho deja algo nuevo para `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home y, si corresponde, actualizarla (sección 8 + Historial) y subirla. No hace falta que el usuario lo pida.
 
 ---
 
@@ -18,7 +18,7 @@
 | Estado | En uso |
 | Última versión (Release) | v0.3.1 — 2026-11-26 |
 | Se conecta con | Firebase, proyecto **notas-pro-2026** (plan gratuito Spark; Firestore en modo producción) |
-| Dispositivos viejos (Android 5/6) | **Sí, hecho**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio. Partes 1 (v0.2.1), 2 (v0.2.2) y 3 (v0.2.6) cerradas: un solo APK anda en el celular, la tablet Android 6.0.1 y la Bangho (Android 5.0) |
+| Dispositivos viejos (Android 5/6) | **Sí, hecho**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio y, al cerrar cada etapa, revisar si lo hecho deja algo nuevo para esa guía (un problema, un arreglo, una versión de biblioteca, una prueba en las tablets) y, si corresponde, actualizarla (sección del tema + Historial) y subirla al repo home. Partes 1 (v0.2.1), 2 (v0.2.2) y 3 (v0.2.6) cerradas: un solo APK anda en el celular, la tablet Android 6.0.1 y la Bangho (Android 5.0) |
 
 ## 2. Etapa actual
 **Inicio de sesión con correo y contraseña propia de ANote: hecho** (Paso A en v0.3.0, Minor: web y lógica compartida; Paso B en v0.3.1, Patch: ajustes para el APK). Falta que el usuario **pegue las reglas nuevas** en Firebase y lo pruebe (sección 3). Próxima etapa: ocultar/mostrar notas por criterios (Releases Patch).
