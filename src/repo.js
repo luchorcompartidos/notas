@@ -34,7 +34,7 @@ export class CloudRepo {
   constructor(db, uid, profile = {}) {
     this.db = db;
     this.uid = uid;
-    this.profile = { name: profile.name || '', email: (profile.email || '').toLowerCase() };
+    this.profile = { name: profile.name || '', email: (profile.email || '').toLowerCase(), verified: profile.verified !== false };
     this.canShare = true;
     this.notes = new Map();
     this.meta = new Map();
@@ -183,7 +183,8 @@ export class CloudRepo {
   me() { return { name: this.profile.name, email: this.profile.email }; }
 
   subscribeInvites(cb) {
-    if (!this.profile.email) { cb([]); return; }
+    // Sin el correo verificado (cuenta con contraseña) las reglas no dejan ver invitaciones.
+    if (!this.profile.email || !this.profile.verified) { cb([]); return; }
     this.listen('invitaciones', query(collection(this.db, 'invites'), where('email', '==', this.profile.email)), {}, (s) => {
       cb(s.docs.map((d) => ({ id: d.id, ...d.data() })).filter((i) => i.status === 'pending'));
     });

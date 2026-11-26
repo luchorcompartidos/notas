@@ -35,8 +35,9 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | — | v0.2.6 | **Android 5.0**: la app ya no se cierra al abrir (la barra de estado usaba una función que existe recién desde Android 6) |
 | — | v0.2.7 | **Tablas: selección de celdas**: elegir celdas sueltas, filas y columnas (también mezcladas) tocándolas, con letras y números como en una planilla, rango, todo e invertir; copiar o cortar como bloque o como lista (para pegar en Excel, Sheets o WhatsApp), pegar sobre la selección (agrega filas y columnas si hace falta), color de fondo, alineación, negrita/cursiva/subrayado, borrar y eliminar filas o columnas. Funciona con el dedo en el celular y con Ctrl + clic en la PC |
 | — | v0.2.8 | **App Links**: en Android, tocar el link de una nota («Copiar (o Enviar) Link») en WhatsApp, Gmail u otra app la abre directo en ANote en vez de la web. En Android 5 aparece «Abrir con…» para elegir |
+| — | v0.3.0 | **Inicio de sesión con correo y contraseña propia de ANote**, conviviendo con Google: «Entrar con correo», «Crear cuenta» (nombre visible, contraseña fuerte, verificación del correo) y «Olvidé mi contraseña». «Seguridad de la cuenta» (menú lateral y panel de la cuenta): aviso para activar la Verificación en 2 Pasos de Google, pasar una cuenta de Google a contraseña propia sin perder nada (y volver atrás) y cambiar el nombre visible. Reglas nuevas: correo verificado para ver lo compartido y bloqueo de las sesiones de Google en las cuentas que pasaron a contraseña |
 
-Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web.
+Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web. Desde la v0.3.0 también se puede entrar con correo y contraseña propia de ANote (en la web y en el APK, sin plugin nativo).
 
 ## Cómo funciona la sincronización
 
@@ -47,6 +48,7 @@ Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza 
   - `notes/{id}`: resumen compartido (dueño, miembros, título, vista previa, casillas, miniatura)
   - `notes/{id}/updates/*`: cambios de Yjs; se compactan cuando pasan de 40
   - `users/{uid}/meta/{id}`: organización personal (color, fijada, papelera)
+  - `security/{uid}`: marca «solo contraseña propia» (v0.3.0); la ponen o la quitan solo quienes entraron con la contraseña en los últimos 10 minutos
 - Las reglas de seguridad están en `firestore.rules` (se pegan en la consola de Firebase cada vez que cambian).
 - Compartir: `invites/{idNota}_{email}` guarda la invitación; al aceptarla, la persona se agrega a `memberIds` con el rol indicado.
 

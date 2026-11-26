@@ -261,6 +261,23 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
   border-radius: 24px; background: var(--primary); color: var(--on-primary); font-weight: 500; font-size: 15px;
 }
 .filled-btn svg { background: #fff; border-radius: 50%; padding: 3px; width: 26px; height: 26px; }
+.outlined-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 48px; padding: 0 24px;
+  border-radius: 24px; border: 1px solid var(--outline); color: var(--primary); font-weight: 500; font-size: 15px; background: transparent;
+}
+.login .filled-btn, .login .outlined-btn { min-width: 260px; }
+/* Correo y contraseña */
+.em-form { text-align: left; }
+.pw-wrap { position: relative; display: flex; }
+.field .pw-wrap input { flex: 1; min-width: 0; padding-right: 48px; }
+.pw-eye { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); }
+.em-switch { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.warn-hint { background: #FFF4E5; color: #5F3B00; text-align: left; }
+[data-scheme="dark"] .warn-hint { background: #4A3000; color: #FFDDB3; }
+.sheet-sub { font-size: 15px; font-weight: 500; margin: 16px 0 6px; }
+.sheet-actions-wrap { flex-wrap: wrap; }
+.sec-tip { background: var(--surface-container); border-radius: 12px; padding: 12px 12px 4px; margin-bottom: 8px; }
+.sheet-title svg { vertical-align: -3px; }
 
 /* ===== Estado de sincronización ===== */
 #btn-sync.warn { color: #B3261E; }

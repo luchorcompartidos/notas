@@ -30,7 +30,11 @@ import { APP_VERSION, CHANGELOG_URL, getLatestRelease, isNewer, formatDate } fro
 import { applyTextDiff, pendingList, flushNote, lastVerified } from './sync.js';
 import { CloudRepo, LocalRepo, orgId } from './repo.js';
 import { yXmlFragmentToProsemirrorJSON } from 'y-prosemirror';
-import { fb, watchAuth, signInGoogle, signOutUser, authErrorMessage, errorDetail, reauthGoogle } from './firebase.js';
+import {
+  fb, watchAuth, signInGoogle, signOutUser, authErrorMessage, errorDetail, reauthUser,
+  signInEmail, signUpEmail, sendVerification, resetPassword, refreshUser, setDisplayName, linkPassword, unlinkPassword,
+  finishPasswordOnly, relinkGoogle, googleSessionBlocked, passwordProblem, hasGoogle, hasPassword, passwordEmail, passwordVerified,
+} from './firebase.js';
 
 const $ = (s) => document.querySelector(s);
 const root = document.documentElement;
@@ -381,6 +385,7 @@ function onOrg(org) {
   renderList();
   paintEditorChrome();
   maybePurge();
+  maybeSecurityTip();
 }
 
 function sortNotes(list) {
@@ -1772,16 +1777,19 @@ $('#btn-sync').addEventListener('click', () => {
     const fine = st.kind === 'ok';
     openSheet(`
       <h2 class="sheet-title">Tu cuenta y sincronización</h2>
-      <p class="sheet-text"><strong>${esc(u.displayName || '')}</strong><br>${esc(u.email || '')}</p>
+      <p class="sheet-text"><strong>${esc(displayName(u))}</strong><br>${esc(u.email || '')}<br>${esc(accountKind(u))}</p>
+      ${hasPassword(u) && !passwordVerified(u) ? `<p class="login-hint warn-hint">Falta verificar el correo ${esc(passwordEmail(u))}. Hasta entonces no ves lo que te compartan.</p>` : ''}
       <div class="sync-lines">
         <p>${icon(fine ? 'cloudDone' : st.kind === 'syncing' ? 'cloudUp' : 'cloudOff')}<span>${esc(label)}</span></p>
         <p>${icon('history')}<span>Última verificación con el servidor: ${esc(ago(state.repo.lastServerAt))}</span></p>
         ${st.pendingNotes ? `<p>${icon('note')}<span>${st.pendingNotes} nota${st.pendingNotes > 1 ? 's' : ''} con cambios de este dispositivo por subir</span></p>` : ''}
       </div>
+      <div class="sheet-actions"><button class="text-btn ripple" id="btn-security">${icon('lock')}<span>Seguridad de la cuenta</span></button></div>
       <div class="sheet-actions"><button class="text-btn ripple" id="btn-signout">Cerrar sesión</button><span class="spacer"></span>
         ${fine ? '' : '<button class="filled-btn ripple" id="btn-sync-now">Reintentar ahora</button>'}</div>
     `, (body) => {
       body.querySelector('#btn-signout').addEventListener('click', doSignOut);
+      body.querySelector('#btn-security').addEventListener('click', showAccountSecurity);
       body.querySelector('#btn-sync-now')?.addEventListener('click', () => { closeOverlays(); syncNow(); });
     });
   } else {
@@ -1789,7 +1797,11 @@ $('#btn-sync').addEventListener('click', () => {
       <h2 class="sheet-title">Sin cuenta</h2>
       <p class="sheet-text">Tus notas se guardan solo en este dispositivo y no se sincronizan.</p>
       <button class="text-btn ripple" id="btn-signin">Iniciar sesión con Google</button>
-    `, (body) => body.querySelector('#btn-signin')?.addEventListener('click', () => { closeOverlays(); doSignIn({ reload: true }); }));
+      <button class="text-btn ripple" id="btn-signin-email">Entrar con correo y contraseña</button>
+    `, (body) => {
+      body.querySelector('#btn-signin')?.addEventListener('click', () => { closeOverlays(); doSignIn({ reload: true }); });
+      body.querySelector('#btn-signin-email')?.addEventListener('click', () => openEmailSheet('signin', { reload: true }));
+    });
   }
 });
 
@@ -1821,7 +1833,41 @@ function startCloud(user) {
   if (state.mode === 'cloud' && state.user?.uid === user.uid) return;
   state.user = user;
   localStorage.setItem('notas-mode', 'cloud');
-  startRepo(new CloudRepo(fb().db, user.uid, { name: user.displayName, email: user.email }), 'cloud');
+  if (user.displayName) localStorage.removeItem('notas-pending-name');
+  // Sin el correo verificado (cuenta con contraseña), no se buscan invitaciones: las reglas no las dejan ver.
+  const verified = !hasPassword(user) || hasGoogle(user) || passwordVerified(user);
+  startRepo(new CloudRepo(fb().db, user.uid, { name: displayName(user), email: user.email, verified }), 'cloud');
+  updateVerifyBanner();
+  checkSession();
+}
+
+// Nombre visible: el de la cuenta, el que se escribió al registrarse (si todavía no llegó) o el del correo.
+function displayName(u) {
+  return u?.displayName || localStorage.getItem('notas-pending-name') || String(u?.email || '').split('@')[0];
+}
+function hasPasswordOnly(u = state.user) { return hasPassword(u) && !hasGoogle(u); }
+function accountKind(u) {
+  if (hasPasswordOnly(u)) return 'Entrás con la contraseña propia de ANote';
+  if (hasPassword(u)) return 'Entrás con Google o con la contraseña propia de ANote (cambio sin terminar)';
+  return 'Entrás con Google';
+}
+
+// Al abrir: si esta sesión es de Google y la cuenta pasó a contraseña propia (en otro dispositivo), se cierra.
+async function checkSession() {
+  if (await googleSessionBlocked()) {
+    await closeEditor();
+    localStorage.removeItem('notas-mode');
+    localStorage.setItem('notas-password-only', '1');
+    await signOutUser();
+    sessionStorage.setItem('notas-login-msg', 'Tu cuenta ahora usa la contraseña propia de ANote: entrá con «Entrar con correo».');
+    location.replace(location.pathname);
+    return;
+  }
+  // Cuenta con contraseña sin verificar: al volver a abrir, se mira si ya se verificó (sin molestar si falla).
+  const u = state.user;
+  if (hasPassword(u) && !passwordVerified(u) && navigator.onLine) {
+    try { const fresh = await refreshUser(); if (fresh && passwordVerified(fresh)) onVerified(); } catch { /* nada */ }
+  }
 }
 
 function startLocal() {
@@ -1833,6 +1879,11 @@ function startLocal() {
 function showLogin() {
   state.mode = null;
   $('#login-link-hint').hidden = !parseNoteHash();
+  const msg = sessionStorage.getItem('notas-login-msg');
+  sessionStorage.removeItem('notas-login-msg');
+  const pw = localStorage.getItem('notas-password-only');
+  $('#login-pw-hint').textContent = msg || 'En este dispositivo entraste con la contraseña propia de ANote: usá «Entrar con correo».';
+  $('#login-pw-hint').hidden = !msg && !pw;
   setView('login');
 }
 
@@ -1846,7 +1897,9 @@ async function doSignIn({ reload = false } = {}) {
       new Promise((_, rej) => { timer = setTimeout(() => rej(Object.assign(new Error('Google no respondió en 45 segundos'), { code: 'timeout' })), 45000); }),
     ]);
     hideSnack();
-    if (reload) location.reload();
+    localStorage.removeItem('notas-password-only');
+    state.pendingSecTip = true; // aviso de seguridad, cuando lleguen los ajustes (por si eligió no verlo más)
+    if (reload) { sessionStorage.setItem('notas-sec-tip', '1'); location.reload(); }
   } catch (e) {
     console.error('Inicio de sesión', e);
     const m = authErrorMessage(e);
@@ -1861,6 +1914,294 @@ $('#btn-google').addEventListener('click', async () => {
   try { await doSignIn(); } finally { b.disabled = false; }
 });
 $('#btn-local').addEventListener('click', startLocal);
+$('#btn-email').addEventListener('click', () => openEmailSheet('signin'));
+
+/* ---------- Correo y contraseña propia de ANote ---------- */
+const TWOSV_URL = 'https://myaccount.google.com/signinoptions/twosv';
+const PW_OPTION_TEXT = "Contraseña propia de ANote: recomendable si tu cuenta de Google no tiene la 'Verificación en 2 Pasos'. Usá un correo distinto de ese Gmail (y, si podés, con 'Verificación en 2 Pasos' o 'Doble Factor de Autenticación' 2FA ), y una contraseña que no uses en otro lado.";
+const PW_RULES = 'Mínimo 10 caracteres, con letras y números. Que no la uses en otro lado.';
+
+function accountError(e, fallback) {
+  console.error(fallback, e);
+  const m = authErrorMessage(e) || fallback;
+  snackbar(m, 'Ver detalle', () => openSheet(`<h2 class="sheet-title">Detalle del error</h2><pre class="error-detail">${esc(errorDetail(e))}</pre>`));
+}
+
+async function askPassword(title = 'Confirmá tu contraseña de ANote', text = '') {
+  const r = await openDialog({ title, text, input: true, password: true, placeholder: 'Contraseña', ok: 'Confirmar' });
+  return r?.value || null;
+}
+
+// Campo de contraseña con botón "mostrar".
+const pwField = (id, label, autocomplete) => `
+  <label class="field pw-field"><span>${label}</span>
+    <span class="pw-wrap"><input type="password" id="${id}" autocomplete="${autocomplete}" autocapitalize="off" spellcheck="false">
+    <button type="button" class="icon-btn small ripple pw-eye" data-eye="${id}" aria-label="Mostrar contraseña">${icon('visibility')}</button></span>
+  </label>`;
+function bindEyes(body) {
+  body.querySelectorAll('[data-eye]').forEach((b) => b.addEventListener('click', () => {
+    const inp = body.querySelector(`#${b.dataset.eye}`);
+    const show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    b.innerHTML = icon(show ? 'visibilityOff' : 'visibility');
+    b.setAttribute('aria-label', show ? 'Ocultar contraseña' : 'Mostrar contraseña');
+  }));
+}
+const isGmail = (e) => /@(gmail|googlemail)\.com$/i.test(String(e || '').trim());
+
+// Entrar, crear cuenta u olvidé mi contraseña (en un panel, desde la pantalla de inicio).
+function openEmailSheet(mode = 'signin', { reload = false, email = '' } = {}) {
+  const titles = { signin: 'Entrar con correo', signup: 'Crear cuenta con correo', reset: 'Olvidé mi contraseña' };
+  const body = {
+    signin: `
+      <label class="field"><span>Correo</span><input type="email" id="em-email" autocomplete="username" autocapitalize="off" spellcheck="false" value="${esc(email)}"></label>
+      ${pwField('em-pass', 'Contraseña', 'current-password')}
+      <div class="sheet-actions"><button class="text-btn ripple" data-go="reset">Olvidé mi contraseña</button><span class="spacer"></span>
+        <button class="filled-btn ripple" id="em-ok">Entrar</button></div>
+      <p class="sheet-text em-switch">¿No tenés cuenta? <button class="text-btn ripple" data-go="signup">Crear cuenta</button></p>`,
+    signup: `
+      <p class="sheet-text">${esc(PW_OPTION_TEXT)}</p>
+      <label class="field"><span>Nombre visible (se ve al compartir notas)</span><input type="text" id="em-name" autocomplete="name" autocapitalize="words"></label>
+      <label class="field"><span>Correo</span><input type="email" id="em-email" autocomplete="username" autocapitalize="off" spellcheck="false" value="${esc(email)}"></label>
+      ${pwField('em-pass', 'Contraseña', 'new-password')}
+      ${pwField('em-pass2', 'Repetir la contraseña', 'new-password')}
+      <p class="sheet-text">${PW_RULES} Te vamos a mandar un correo para verificarlo (puede caer en spam).</p>
+      <p class="login-hint warn-hint" id="em-gmail" hidden>Es un Gmail: quien sepa tu contraseña de Google podría leer ese correo y cambiar la de ANote. Si podés, usá otro correo.</p>
+      <div class="sheet-actions"><button class="text-btn ripple" data-go="signin">Ya tengo cuenta</button><span class="spacer"></span>
+        <button class="filled-btn ripple" id="em-ok">Crear cuenta</button></div>`,
+    reset: `
+      <p class="sheet-text">Te mandamos un correo con un link para elegir una contraseña nueva (puede caer en spam). Si tu cuenta es de Google, no hace falta: usá «Continuar con Google».</p>
+      <label class="field"><span>Correo</span><input type="email" id="em-email" autocomplete="username" autocapitalize="off" spellcheck="false" value="${esc(email)}"></label>
+      <div class="sheet-actions"><button class="text-btn ripple" data-go="signin">Volver</button><span class="spacer"></span>
+        <button class="filled-btn ripple" id="em-ok">Enviar el correo</button></div>`,
+  }[mode];
+  openSheet(`<h2 class="sheet-title">${titles[mode]}</h2><div class="em-form">${body}</div>`, (root) => {
+    const b = root.querySelector('.em-form');
+    const val = (id) => b.querySelector(`#${id}`)?.value || '';
+    bindEyes(b);
+    b.querySelectorAll('[data-go]').forEach((x) => x.addEventListener('click', () => openEmailSheet(x.dataset.go, { reload, email: val('em-email') })));
+    b.querySelector('#em-email').addEventListener('input', () => { const g = b.querySelector('#em-gmail'); if (g) g.hidden = !isGmail(val('em-email')); });
+    const ok = b.querySelector('#em-ok');
+    const run = async () => {
+      const email = val('em-email').trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { snackbar('Escribí un correo válido'); b.querySelector('#em-email').focus(); return; }
+      ok.disabled = true;
+      try {
+        if (mode === 'signin') {
+          if (!val('em-pass')) { snackbar('Falta la contraseña'); b.querySelector('#em-pass').focus(); return; }
+          snackbar('Entrando…');
+          await signInEmail(email, val('em-pass'));
+          localStorage.setItem('notas-password-only', '1');
+          hideSnack(); closeOverlays();
+          if (reload) location.reload();
+        } else if (mode === 'signup') {
+          const name = val('em-name').trim();
+          if (!name) { snackbar('Escribí tu nombre visible'); b.querySelector('#em-name').focus(); return; }
+          const prob = passwordProblem(val('em-pass'), email);
+          if (prob) { snackbar(prob); b.querySelector('#em-pass').focus(); return; }
+          if (val('em-pass') !== val('em-pass2')) { snackbar('Las contraseñas no coinciden'); b.querySelector('#em-pass2').focus(); return; }
+          snackbar('Creando la cuenta…');
+          localStorage.setItem('notas-pending-name', name);
+          await signUpEmail(name, email, val('em-pass'));
+          if (state.repo?.profile) state.repo.profile.name = name;
+          localStorage.setItem('notas-password-only', '1');
+          closeOverlays();
+          if (reload) { location.reload(); return; }
+          showVerifySheet(email, true);
+        } else {
+          await resetPassword(email);
+          openSheet(`<h2 class="sheet-title">Correo enviado</h2>
+            <p class="sheet-text">Si ${esc(email)} tiene una cuenta de ANote con contraseña, te llega un correo para elegir una nueva (mirá también en spam). Después entrá con la contraseña nueva.</p>
+            <div class="sheet-actions"><span class="spacer"></span><button class="filled-btn ripple" id="em-back">Entrar</button></div>`,
+          (r2) => r2.querySelector('#em-back').addEventListener('click', () => openEmailSheet('signin', { reload, email })));
+        }
+      } catch (e) {
+        if (mode === 'signup') localStorage.removeItem('notas-pending-name');
+        accountError(e, mode === 'signin' ? 'No se pudo entrar' : mode === 'signup' ? 'No se pudo crear la cuenta' : 'No se pudo enviar el correo');
+      } finally { ok.disabled = false; }
+    };
+    ok.addEventListener('click', run);
+    b.querySelectorAll('input').forEach((inp) => inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); } }));
+    setTimeout(() => b.querySelector(mode === 'signup' ? '#em-name' : email && mode === 'signin' ? '#em-pass' : '#em-email')?.focus(), 80);
+  });
+}
+
+// Panel "Verificá tu correo" (después de crear la cuenta o de agregar la contraseña).
+function showVerifySheet(email, isNew = false) {
+  openSheet(`<h2 class="sheet-title">Verificá tu correo</h2>
+    <p class="sheet-text">${isNew ? 'Ya podés usar ANote. ' : ''}Te mandamos un correo a <strong>${esc(email)}</strong> con un link para verificarlo (si no está, mirá en spam). Tocá el link y después «Ya lo verifiqué».</p>
+    <p class="sheet-text">Hasta verificarlo no ves las notas que te compartan, porque se comparten por correo.</p>
+    <div class="sheet-actions"><button class="text-btn ripple" id="vf-resend">Reenviar el correo</button><span class="spacer"></span>
+      <button class="filled-btn ripple" id="vf-done">Ya lo verifiqué</button></div>`, (b) => {
+    b.querySelector('#vf-resend').addEventListener('click', async () => {
+      try { await sendVerification(); snackbar('Correo reenviado'); } catch (e) { accountError(e, 'No se pudo reenviar el correo'); }
+    });
+    b.querySelector('#vf-done').addEventListener('click', checkVerified);
+  });
+}
+
+async function checkVerified() {
+  try {
+    const u = await refreshUser();
+    if (u && passwordVerified(u)) { onVerified(); return true; }
+    snackbar('Todavía figura sin verificar. Tocá el link del correo y probá de nuevo.');
+  } catch (e) { accountError(e, 'No se pudo comprobar'); }
+  return false;
+}
+
+// Correo recién verificado: se recarga para que se vean las invitaciones (las reglas ya lo permiten).
+function onVerified() {
+  sessionStorage.setItem('notas-login-msg-ok', 'Correo verificado');
+  closeOverlays();
+  location.reload();
+}
+
+function updateVerifyBanner() {
+  const u = state.user;
+  const show = state.mode === 'cloud' && hasPassword(u) && !passwordVerified(u);
+  $('#verify-banner').hidden = !show;
+  if (show) $('#verify-text').textContent = `Verificá tu correo (${passwordEmail(u)}) para ver lo que te compartan.`;
+}
+$('#verify-action').addEventListener('click', () => showVerifySheet(passwordEmail(state.user)));
+
+// Aviso de seguridad para cuentas de Google: Verificación en 2 Pasos.
+function securityTipHtml() {
+  return `<div class="sec-tip">
+    <p class="sheet-text"><strong>Recomendado: activá la Verificación en 2 Pasos de Google</strong>, con <strong>aviso en el celular</strong> o con <strong>llave de acceso</strong> (mejor que con SMS). Así, aunque alguien averigüe tu contraseña de Google, no puede entrar a tu cuenta ni a tus notas.</p>
+    <p class="sheet-text">Activala también en el <strong>correo de recuperación</strong> de tu cuenta de Google. ANote no puede saber si ya la tenés activada: es solo un aviso.</p>
+    <a class="text-btn" href="${TWOSV_URL}" target="_blank" rel="noopener">Abrir la Verificación en 2 Pasos de Google</a>
+  </div>`;
+}
+
+function maybeSecurityTip() {
+  if (!state.pendingSecTip || !state.org?.settingsLoaded || state.mode !== 'cloud') return;
+  state.pendingSecTip = false;
+  if (!hasGoogle(state.user) || state.org.settings.secTipOff) return;
+  openSheet(`<h2 class="sheet-title">${icon('lock')} Seguridad de tu cuenta</h2>${securityTipHtml()}
+    <p class="sheet-text">${esc(PW_OPTION_TEXT)}</p>
+    <div class="sheet-actions"><button class="text-btn ripple" id="st-never">No volver a mostrar</button><span class="spacer"></span>
+      <button class="text-btn ripple" id="st-more">Ver opciones</button><button class="filled-btn ripple" id="st-ok">Entendido</button></div>`, (b) => {
+    b.querySelector('#st-never').addEventListener('click', () => { state.repo.saveSettings({ secTipOff: true }); closeOverlays(); snackbar('Podés verlo desde ⋮ Menú → Seguridad de la cuenta'); });
+    b.querySelector('#st-ok').addEventListener('click', closeOverlays);
+    b.querySelector('#st-more').addEventListener('click', showAccountSecurity);
+  });
+}
+
+// Seguridad de la cuenta: Verificación en 2 Pasos, pasar a contraseña propia (y volver), nombre visible.
+function showAccountSecurity() {
+  const u = state.user;
+  if (state.mode !== 'cloud' || !u) return;
+  const g = hasGoogle(u); const p = hasPassword(u);
+  const pe = passwordEmail(u); const ver = passwordVerified(u);
+  let part;
+  if (g && !p) {
+    part = `<h3 class="sheet-sub">Contraseña propia de ANote</h3>
+      <p class="sheet-text">${esc(PW_OPTION_TEXT)}</p>
+      <p class="sheet-text">Es la misma cuenta: conservás tus notas, las compartidas y los ajustes. Después de verificar el correo, se desvincula Google y ya no se puede entrar con Google (se puede volver atrás).</p>
+      <div class="sheet-actions"><span class="spacer"></span><button class="filled-btn ripple" id="sec-link">Pasar a contraseña propia</button></div>`;
+  } else if (g && p) {
+    part = `<h3 class="sheet-sub">Pasar a contraseña propia (sin terminar)</h3>
+      <p class="sheet-text">Correo de ANote: <strong>${esc(pe)}</strong> — ${ver ? 'verificado' : '<strong>sin verificar</strong>'}.</p>
+      ${ver
+    ? '<p class="sheet-text">Último paso: confirmar la contraseña y desvincular Google. Desde entonces se entra solo con el correo y la contraseña de ANote, y se cierran las sesiones de Google de los otros dispositivos.</p>'
+    : '<p class="sheet-text">Tocá el link que te mandamos a ese correo (mirá también en spam) y después «Ya lo verifiqué».</p>'}
+      <div class="sheet-actions sheet-actions-wrap"><button class="text-btn ripple" id="sec-cancel">Cancelar el cambio</button><span class="spacer"></span>
+        ${ver ? '<button class="filled-btn ripple" id="sec-finish">Desvincular Google</button>'
+    : '<button class="text-btn ripple" id="sec-resend">Reenviar</button><button class="filled-btn ripple" id="sec-check">Ya lo verifiqué</button>'}</div>`;
+  } else {
+    part = `<h3 class="sheet-sub">Contraseña propia de ANote</h3>
+      <p class="sheet-text">Entrás con <strong>${esc(pe)}</strong> — ${ver ? 'verificado' : '<strong>sin verificar</strong>'}. La cuenta con contraseña tiene un solo factor: usá una contraseña que no uses en otro lado y, si podés, activá la verificación en 2 pasos en ese correo.</p>
+      <p class="sheet-text">Para cambiar la contraseña: cerrá sesión y usá «Olvidé mi contraseña».</p>
+      <div class="sheet-actions sheet-actions-wrap">${ver ? '' : '<button class="text-btn ripple" id="sec-resend">Reenviar verificación</button><button class="text-btn ripple" id="sec-check">Ya lo verifiqué</button>'}
+        <span class="spacer"></span><button class="text-btn ripple" id="sec-google">Volver a usar Google</button></div>`;
+  }
+  openSheet(`<h2 class="sheet-title">${icon('lock')} Seguridad de la cuenta</h2>
+    <p class="sheet-text"><strong>${esc(displayName(u))}</strong> · ${esc(accountKind(u))}</p>
+    ${g ? securityTipHtml() : ''}
+    ${part}
+    <div class="sheet-actions"><button class="text-btn ripple" id="sec-name">Cambiar el nombre visible</button>
+      ${g ? `<span class="spacer"></span><button class="text-btn ripple" id="sec-tip">${state.org.settings.secTipOff ? 'Volver a mostrar el aviso al entrar' : 'No mostrar el aviso al entrar'}</button>` : ''}</div>`, (b) => {
+    const on = (id, fn) => b.querySelector(`#${id}`)?.addEventListener('click', fn);
+    on('sec-link', openLinkPasswordSheet);
+    on('sec-resend', async () => { try { await sendVerification(); snackbar(`Correo reenviado a ${pe}`); } catch (e) { accountError(e, 'No se pudo reenviar'); } });
+    on('sec-check', async () => { if (await checkVerified()) return; });
+    on('sec-cancel', async () => {
+      const ok = await openDialog({ title: '¿Cancelar el cambio?', text: `Se quita la contraseña de ANote (${pe}) y seguís entrando con Google.`, ok: 'Quitar la contraseña', danger: true });
+      if (!ok) return;
+      try { await unlinkPassword(); state.user = fb().auth.currentUser; snackbar('Listo: seguís entrando con Google'); showAccountSecurity(); } catch (e) { accountError(e, 'No se pudo cancelar'); }
+    });
+    on('sec-finish', async () => {
+      const pw = await askPassword('Último paso: confirmá tu contraseña de ANote', `Después se desvincula Google: entrás solo con ${pe} y la contraseña.`);
+      if (!pw) return;
+      snackbar('Desvinculando Google…');
+      try {
+        await finishPasswordOnly(pw);
+        state.user = fb().auth.currentUser;
+        closeOverlays();
+        openSheet(`<h2 class="sheet-title">Listo</h2>
+          <p class="sheet-text">Desde ahora entrás a ANote con <strong>${esc(pe)}</strong> y tu contraseña propia («Entrar con correo»). Las sesiones de Google que estén abiertas en otros dispositivos se cierran al abrir ANote.</p>
+          <p class="sheet-text">Si alguien entra con «Continuar con Google» usando tu Gmail, se le crea una cuenta nueva y vacía: no ve tus notas.</p>`);
+      } catch (e) { accountError(e, 'No se pudo terminar el cambio'); }
+    });
+    on('sec-google', async () => {
+      const ok = await openDialog({ title: '¿Volver a usar Google?', text: 'Elegís una cuenta de Google y queda vinculada: vas a poder entrar con Google o con la contraseña de ANote.', ok: 'Continuar' });
+      if (!ok) return;
+      const pw = await askPassword();
+      if (!pw) return;
+      try {
+        await relinkGoogle(pw);
+        state.user = fb().auth.currentUser;
+        snackbar('Google vinculado'); showAccountSecurity();
+      } catch (e) { accountError(e, 'No se pudo vincular Google'); }
+    });
+    on('sec-name', async () => {
+      const r = await openDialog({ title: 'Nombre visible', text: 'Es el que ven las personas con las que compartís notas.', input: true, value: displayName(u), ok: 'Guardar' });
+      if (!r?.value) return;
+      try {
+        await setDisplayName(r.value);
+        if (state.repo?.profile) state.repo.profile.name = r.value;
+        localStorage.removeItem('notas-pending-name');
+        snackbar('Nombre guardado'); showAccountSecurity();
+      } catch (e) { accountError(e, 'No se pudo guardar el nombre'); }
+    });
+    on('sec-tip', () => { const off = !state.org.settings.secTipOff; state.repo.saveSettings({ secTipOff: off }); state.org.settings.secTipOff = off; showAccountSecurity(); });
+  });
+}
+
+// Paso 1 de "pasar a contraseña propia": correo distinto del Gmail y contraseña.
+function openLinkPasswordSheet() {
+  const gmail = String(state.user?.email || '').toLowerCase();
+  openSheet(`<h2 class="sheet-title">Pasar a contraseña propia</h2>
+    <p class="sheet-text">Usá un correo distinto de ${esc(gmail || 'tu Gmail')} y una contraseña que no uses en otro lado. ${PW_RULES}</p>
+    <div class="em-form">
+      <label class="field"><span>Correo nuevo para ANote</span><input type="email" id="lk-email" autocomplete="username" autocapitalize="off" spellcheck="false"></label>
+      ${pwField('lk-pass', 'Contraseña', 'new-password')}
+      ${pwField('lk-pass2', 'Repetir la contraseña', 'new-password')}
+      <p class="sheet-text">Te mandamos un correo para verificarlo. Hasta que lo verifiques y termines el cambio, seguís pudiendo entrar con Google.</p>
+      <div class="sheet-actions"><button class="text-btn ripple" id="lk-back">Volver</button><span class="spacer"></span><button class="filled-btn ripple" id="lk-ok">Continuar</button></div>
+    </div>`, (b) => {
+    bindEyes(b);
+    const val = (id) => b.querySelector(`#${id}`).value;
+    b.querySelector('#lk-back').addEventListener('click', showAccountSecurity);
+    const ok = b.querySelector('#lk-ok');
+    ok.addEventListener('click', async () => {
+      const email = val('lk-email').trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { snackbar('Escribí un correo válido'); return; }
+      if (email === gmail) { snackbar('Usá un correo distinto del de tu cuenta de Google'); return; }
+      const prob = passwordProblem(val('lk-pass'), email);
+      if (prob) { snackbar(prob); return; }
+      if (val('lk-pass') !== val('lk-pass2')) { snackbar('Las contraseñas no coinciden'); return; }
+      ok.disabled = true;
+      snackbar('Agregando la contraseña…');
+      try {
+        await linkPassword(email, val('lk-pass'));
+        state.user = fb().auth.currentUser;
+        hideSnack();
+        showVerifySheet(email);
+      } catch (e) { accountError(e, 'No se pudo agregar la contraseña'); } finally { ok.disabled = false; }
+    });
+  });
+}
 
 /* ---------- Nota de bienvenida (guía de qué probar) ---------- */
 function maybeWelcome() {
@@ -1915,13 +2256,15 @@ async function checkUpdates() {
 
 /* ---------- Diálogo (Material) ---------- */
 let dialogResolve = null;
-function openDialog({ title, text = '', input = false, value = '', placeholder = '', colors = null, color = null, ok = 'Aceptar', danger = false }) {
+function openDialog({ title, text = '', input = false, password = false, value = '', placeholder = '', colors = null, color = null, ok = 'Aceptar', danger = false }) {
   if (dialogResolve) closeDialog(null);
   $('#dialog-title').textContent = title;
   $('#dialog-text').textContent = text;
   $('#dialog-text').hidden = !text;
   const inp = $('#dialog-input');
   inp.hidden = !input; inp.value = value; inp.placeholder = placeholder;
+  inp.type = password ? 'password' : 'text';
+  inp.autocomplete = password ? 'current-password' : 'off';
   const box = $('#dialog-colors');
   let chosen = color || (colors ? colors[0] : null);
   box.hidden = !colors;
@@ -1940,7 +2283,11 @@ function openDialog({ title, text = '', input = false, value = '', placeholder =
   requestAnimationFrame(() => $('#dialog').classList.add('open'));
   if (input) setTimeout(() => { inp.focus(); inp.select(); }, 50);
   return new Promise((resolve) => {
-    dialogResolve = (accepted) => resolve(accepted ? { value: inp.value.trim(), color: chosen } : null);
+    dialogResolve = (accepted) => {
+      const v = password ? inp.value : inp.value.trim();
+      if (password) inp.value = ''; // no dejar la contraseña en la página
+      resolve(accepted ? { value: v, color: chosen } : null);
+    };
   });
 }
 function closeDialog(accepted) {
@@ -2012,6 +2359,7 @@ function renderDrawer() {
     <div class="drawer-item"><button class="drawer-link ripple" id="drawer-settings">${icon('settings')}<span class="drawer-label">Plazo de la papelera</span></button></div>
     <div class="drawer-item"><button class="drawer-link ripple" id="drawer-autotitle">${icon('title')}<span class="drawer-label">Título automático${state.org.settings.autoTitleOn ? ' (activado)' : ''}</span></button></div>
     <div class="drawer-item"><button class="drawer-link ripple" id="drawer-copymode">${icon('copy')}<span class="drawer-label">Copiar celdas de tablas: ${COPY_MODE_LABEL[copyModeDefault()]}</span></button></div>
+    ${state.mode === 'cloud' ? `<div class="drawer-item"><button class="drawer-link ripple" id="drawer-security">${icon('lock')}<span class="drawer-label">Seguridad de la cuenta</span></button></div>` : ''}
   `;
   $('#drawer-body').querySelectorAll('[data-kind]').forEach((b) => b.addEventListener('click', () => {
     setFilter(b.dataset.id ? { kind: b.dataset.kind, id: b.dataset.id } : { kind: b.dataset.kind });
@@ -2029,6 +2377,7 @@ function renderDrawer() {
   $('#drawer-settings').addEventListener('click', () => { closeOverlays(); showTrashSettings(); });
   $('#drawer-autotitle').addEventListener('click', () => { closeOverlays(); showAutoTitleSettings(); });
   $('#drawer-copymode').addEventListener('click', () => { closeOverlays(); showCopyModeSettings(); });
+  $('#drawer-security')?.addEventListener('click', () => { closeOverlays(); showAccountSecurity(); });
 }
 
 /* ---------- Carpetas ---------- */
@@ -3738,8 +4087,9 @@ async function unlockNote(n, reason = 'Desbloquear nota') {
   if (!r.unavailable) { if (r.message) snackbar('No se desbloqueó la nota'); return false; }
   // Sin huella ni bloqueo de pantalla en este dispositivo
   if (state.mode === 'cloud' && !isNative) {
-    const ok = await openDialog({ title: 'Confirmá que sos vos', text: 'Este navegador no tiene huella disponible. Para abrir la nota, volvé a confirmar tu cuenta de Google.', ok: 'Confirmar con Google' });
-    if (ok && await reauthGoogle()) { state.unlocked.add(n.id); return true; }
+    const confirmGoogle = async () => !!(await openDialog({ title: 'Confirmá que sos vos', text: 'Este navegador no tiene huella disponible. Para abrir la nota, volvé a confirmar tu cuenta de Google.', ok: 'Confirmar con Google' }));
+    const askPw = () => askPassword('Confirmá que sos vos', 'Este navegador no tiene huella disponible. Para abrir la nota, escribí tu contraseña de ANote.');
+    if (await reauthUser({ askPassword: askPw, confirmGoogle })) { state.unlocked.add(n.id); return true; }
     return false;
   }
   const ok = await openDialog({ title: 'Sin huella en este dispositivo', text: isNative ? 'Configurá un bloqueo de pantalla (huella, PIN o patrón) en Android para proteger las notas bloqueadas. ¿Abrirla igual?' : 'Este navegador no tiene huella disponible. ¿Abrir la nota igual?', ok: 'Abrir' });
@@ -4166,6 +4516,9 @@ function init() {
     } else clearTimeout(lockTimer);
   });
 
+  if (sessionStorage.getItem('notas-sec-tip')) { sessionStorage.removeItem('notas-sec-tip'); state.pendingSecTip = true; }
+  const okMsg = sessionStorage.getItem('notas-login-msg-ok');
+  if (okMsg) { sessionStorage.removeItem('notas-login-msg-ok'); setTimeout(() => snackbar(okMsg), 600); }
   watchAuth((user) => {
     if (user) startCloud(user);
     else if (localStorage.getItem('notas-mode') === 'local') startLocal();
