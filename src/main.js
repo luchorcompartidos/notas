@@ -323,7 +323,7 @@ function matchesFilter(n, f = state.filter) {
     case 'folder': return !n.trashed && !n.archived && (n.folders || []).includes(f.id);
     case 'label': return !n.trashed && !n.archived && (n.labels || []).includes(f.id);
     // Las notas ocultas (a mano o por reglas) solo faltan en la vista principal de Notas
-    default: return !n.trashed && !n.archived && !n.hidden && !hiddenByRules(n);
+    default: return !n.trashed && !n.archived && !n.hidden && (rulesPeek || !hiddenByRules(n));
   }
 }
 
@@ -335,12 +335,56 @@ const RULE_TYPES = [
   ['shared', 'Compartidas', 'people'], ['unorg', 'Sin organizar', 'removeFolder'], ['complete', 'Listas completas', 'checklist'],
   ['age', 'Antigüedad', 'history'], ['locked', 'Bloqueadas con huella', 'lock'], ['template', 'Creadas desde una plantilla', 'template'],
 ];
-const RULES_DEFAULT = { on: true, mode: 'hide', combine: 'any', keepPinned: true, rules: [] };
+const RULES_DEFAULT = { on: true, mode: 'hide', combine: 'any', keepPinned: true, rules: [], view: null, loose: null };
 let rulesMemo = null;
+// «Mostrar» del aviso de la pantalla principal: se ven las ocultas por reglas hasta tocar «Ocultar» (no se guarda)
+let rulesPeek = false;
 
 function rulesCfg() {
   const r = state.org.settings.hideRules || {};
   return { ...RULES_DEFAULT, ...r, rules: Array.isArray(r.rules) ? r.rules : [] };
+}
+
+/* Vistas con nombre (v0.3.3): settings/prefs.hideViews = [{ id, name, cfg: { mode, combine, keepPinned, rules } }]
+ * hideRules.view = id de la vista elegida (sus cambios se guardan solos en la vista);
+ * hideRules.loose = las reglas sin nombre, guardadas al elegir una vista, para volver con «Sin vista». */
+const ruleCore = (c) => {
+  const x = { ...RULES_DEFAULT, ...(c || {}) };
+  return { mode: x.mode === 'show' ? 'show' : 'hide', combine: x.combine === 'all' ? 'all' : 'any', keepPinned: !!x.keepPinned, rules: Array.isArray(x.rules) ? x.rules : [] };
+};
+function hideViewsList() {
+  const v = state.org.settings.hideViews;
+  return Array.isArray(v) ? v.filter((x) => x && x.id) : [];
+}
+const activeView = (cfg = rulesCfg()) => (cfg.view ? hideViewsList().find((v) => v.id === cfg.view) || null : null);
+const newViewId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+
+// Guarda las reglas (y las vistas). Con una vista elegida, sus reglas se copian solas en esa vista.
+function saveRules(c, views = hideViewsList()) {
+  const v = { on: !!c.on, ...ruleCore(c), view: c.view || null, loose: c.loose ? ruleCore(c.loose) : null };
+  if (v.view && !views.some((x) => x.id === v.view)) v.view = null; // la borraron en otro dispositivo
+  const list = views.map((x) => (x.id === v.view ? { ...x, cfg: ruleCore(v) } : x));
+  state.repo.saveSettings({ hideRules: v, hideViews: list });
+  state.org.settings.hideRules = v;
+  state.org.settings.hideViews = list;
+  rulesMemo = null;
+  renderList(); renderDrawer();
+}
+
+// Elegir una vista (id) o volver a las reglas sin nombre (null)
+function applyView(id, { undo = true } = {}) {
+  const c = rulesCfg();
+  if ((c.view || null) === (id || null)) return;
+  const prev = JSON.parse(JSON.stringify(c));
+  let next;
+  if (id) {
+    const v = hideViewsList().find((x) => x.id === id);
+    if (!v) return;
+    next = { ...ruleCore(v.cfg), on: true, view: id, loose: c.view ? c.loose : ruleCore(c) };
+  } else next = { ...ruleCore(c.loose), on: c.on, view: null, loose: null };
+  saveRules(next);
+  const name = activeView()?.name;
+  if (undo) snackbar(name ? `Vista «${name}»` : 'Sin vista: reglas sin nombre', 'Deshacer', () => saveRules(prev));
 }
 
 // La regla tiene efecto (las etiquetas/carpetas borradas no cuentan)
@@ -535,6 +579,7 @@ function renderList() {
     note.textContent = 'Orden manual: arrastrá cada nota desde su manija.';
     note.hidden = false;
   } else note.hidden = true;
+  renderRulesBar(!searching && f.kind === 'notes');
 
   // Subcarpetas de la carpeta actual
   const chips = $('#folder-children');
@@ -563,6 +608,49 @@ function renderList() {
   [...state.selection].forEach((id) => { if (!visible.some((n) => n.id === id)) state.selection.delete(id); });
   updateSelectionUi();
   requestAnimationFrame(() => { markClamped(); updateMoreBelow(); });
+}
+
+/* Aviso de la pantalla principal (v0.3.3): «N notas ocultas por reglas · Mostrar», con la vista elegida
+ * e interruptor rápido para apagar o prender todas las reglas. */
+function renderRulesBar(show) {
+  const bar = $('#rules-bar');
+  const cfg = rulesCfg();
+  const view = activeView(cfg);
+  const views = hideViewsList();
+  if (!show || (!cfg.rules.some(ruleActive) && !view)) { bar.hidden = true; return; }
+  const n = cfg.on ? mainCandidates().filter((x) => hiddenByRules(x)).length : 0;
+  if (cfg.on && !n && !view) { bar.hidden = true; return; }
+  const text = !cfg.on ? 'Reglas apagadas: se ven todas las notas'
+    : !n ? 'Las reglas no ocultan ninguna nota'
+      : rulesPeek ? (n === 1 ? 'Se ve la nota oculta por reglas' : `Se ven las ${n} notas ocultas por reglas`)
+        : `${plural(n, 'nota oculta', 'notas ocultas')} por reglas`;
+  bar.innerHTML = `${views.length ? `<button class="chip ripple rb-view" id="rb-view" aria-label="Elegir vista">${icon('visibility')}<span>${esc(view ? view.name : 'Sin vista')}</span>${icon('dropdown')}</button>` : ''}
+    <button class="rb-text" id="rb-text">${text}</button>
+    ${cfg.on && n ? `<button class="text-btn ripple" id="rb-peek">${rulesPeek ? 'Ocultar' : 'Mostrar'}</button>` : ''}
+    <button class="rb-switch ripple" id="rb-on" role="switch" aria-checked="${cfg.on}" aria-label="${cfg.on ? 'Apagar las reglas' : 'Prender las reglas'}"><span class="switch${cfg.on ? ' on' : ''}"></span></button>`;
+  bar.classList.toggle('off', !cfg.on);
+  bar.classList.toggle('peek', cfg.on && rulesPeek && n > 0);
+  bar.hidden = false;
+  $('#rb-text').addEventListener('click', showRulesSettings);
+  $('#rb-peek')?.addEventListener('click', () => { rulesPeek = !rulesPeek; renderList(); });
+  $('#rb-on').addEventListener('click', () => {
+    const on = !rulesCfg().on;
+    rulesPeek = false;
+    saveRules({ ...rulesCfg(), on });
+    snackbar(on ? 'Reglas activadas' : 'Reglas apagadas: se ven todas las notas', 'Deshacer', () => saveRules({ ...rulesCfg(), on: !on }));
+  });
+  $('#rb-view')?.addEventListener('click', (e) => openViewMenu(e.currentTarget));
+}
+
+// Menú para cambiar de vista (desde el aviso)
+function openViewMenu(anchor) {
+  const cur = rulesCfg().view || null;
+  openMenu(anchor, [
+    ...hideViewsList().map((v) => ({ label: esc(v.name), checked: v.id === cur, onClick: () => applyView(v.id) })),
+    { label: 'Sin vista (reglas sin nombre)', checked: !cur, onClick: () => applyView(null) },
+    { divider: true },
+    { label: 'Ocultar/mostrar por reglas…', onClick: () => showRulesSettings() },
+  ]);
 }
 
 function cardEl(n) {
@@ -646,9 +734,13 @@ function cardEl(n) {
   }
 
   // Marca [Oculta] a la derecha del título (o arriba del texto si no tiene título)
-  if (n.hidden && !n.trashed) {
+  // Con «Mostrar» del aviso, las ocultas por reglas llevan «[Oculta por reglas]» en la pantalla principal
+  const peekTag = !n.hidden && rulesPeek && state.filter.kind === 'notes' && !state.search.active && hiddenByRules(n);
+  if ((n.hidden && !n.trashed) || peekTag) {
     const tag = document.createElement('span');
-    tag.className = 'hidden-tag'; tag.textContent = '[Oculta]'; tag.title = 'Oculta en la pantalla principal';
+    tag.className = 'hidden-tag';
+    tag.textContent = peekTag ? '[Oculta por reglas]' : '[Oculta]';
+    tag.title = peekTag ? 'Oculta por reglas en la pantalla principal (se ve porque tocaste «Mostrar»)' : 'Oculta en la pantalla principal';
     const t = el.querySelector('.card-title');
     if (t) t.append(' ', tag);
     else { const p = document.createElement('p'); p.className = 'card-title card-title-tag'; p.appendChild(tag); el.insertBefore(p, el.querySelector('.card-img')?.nextSibling || check.nextSibling); }
@@ -2411,6 +2503,17 @@ function openDrawer() {
 }
 $('#btn-drawer').addEventListener('click', openDrawer);
 
+// Vistas con nombre en el menú lateral, debajo de «Ocultar/mostrar por reglas»
+function viewItems() {
+  const views = hideViewsList();
+  if (!views.length) return '';
+  const cur = rulesCfg().view || null;
+  const row = (id, name) => `<div class="drawer-item drawer-view${(id || null) === cur ? ' current' : ''}" style="--depth:1">
+      <button class="drawer-link ripple" data-view="${esc(id || '')}" aria-pressed="${(id || null) === cur}">${(id || null) === cur ? icon('check') : '<span class="drawer-view-space"></span>'}<span class="drawer-label">${esc(name)}</span></button>
+    </div>`;
+  return [...[...views].sort(byName).map((v) => row(v.id, `Vista: ${v.name}`)), row(null, 'Sin vista')].join('');
+}
+
 function renderDrawer() {
   const f = state.filter;
   const active = (kind, id) => (f.kind === kind && (id == null || f.id === id) ? ' active' : '');
@@ -2450,6 +2553,7 @@ function renderDrawer() {
     ${item('templates', null, icon('template'), `Plantillas (${count((n) => n.template && !n.trashed)})`)}
     <div class="drawer-item"><button class="drawer-link ripple" id="drawer-hidden">${icon('visibilityOff')}<span class="drawer-label">Ocultas (${count((n) => n.hidden && !n.trashed && !n.template)})</span></button></div>
     <div class="drawer-item"><button class="drawer-link ripple" id="drawer-rules">${icon('visibility')}<span class="drawer-label">Ocultar/mostrar por reglas${rulesLabel()}</span></button></div>
+    ${viewItems()}
     ${item('archive', null, icon('archive'), `Archivo (${count((n) => n.archived && !n.trashed && !n.template)})`)}
     ${item('trash', null, icon('delete'), `Papelera (${count((n) => n.trashed)})`)}
     <div class="drawer-divider"></div>
@@ -2472,6 +2576,11 @@ function renderDrawer() {
   $('#drawer-new-label').addEventListener('click', () => newLabel());
   $('#drawer-hidden').addEventListener('click', () => { closeOverlays(); showHiddenManager(); });
   $('#drawer-rules').addEventListener('click', () => { closeOverlays(); showRulesSettings(); });
+  // Vistas con nombre: se eligen desde el menú y se va a la pantalla principal para ver el efecto
+  $('#drawer-body').querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => {
+    applyView(b.dataset.view || null);
+    setFilter({ kind: 'notes' });
+  }));
   $('#drawer-settings').addEventListener('click', () => { closeOverlays(); showTrashSettings(); });
   $('#drawer-autotitle').addEventListener('click', () => { closeOverlays(); showAutoTitleSettings(); });
   $('#drawer-copymode').addEventListener('click', () => { closeOverlays(); showCopyModeSettings(); });
@@ -3090,7 +3199,8 @@ function rulesLabel() {
   const k = cfg.rules.filter(ruleActive).length;
   if (!cfg.rules.length) return '';
   if (!cfg.on) return ' (apagadas)';
-  return k ? ` (${k} activa${k > 1 ? 's' : ''})` : ' (sin efecto)';
+  const v = activeView(cfg);
+  return k ? ` (${v ? `${esc(v.name)}: ` : ''}${k} activa${k > 1 ? 's' : ''})` : ' (sin efecto)';
 }
 
 // Dueños de las notas que me compartieron (para la regla "de un dueño en particular")
@@ -3122,13 +3232,29 @@ function ruleText(r) {
 
 function showRulesSettings() {
   const ui = { cfg: rulesCfg(), screen: 'main', idx: -1, draft: null };
-  const save = () => {
-    const c = ui.cfg;
-    const v = { on: !!c.on, mode: c.mode === 'show' ? 'show' : 'hide', combine: c.combine === 'all' ? 'all' : 'any', keepPinned: !!c.keepPinned, rules: c.rules };
-    state.repo.saveSettings({ hideRules: v });
-    state.org.settings.hideRules = v;
-    rulesMemo = null;
-    renderList(); renderDrawer();
+  // Con una vista elegida, saveRules copia los cambios en esa vista
+  const save = () => saveRules(ui.cfg);
+  const reload = () => { ui.cfg = rulesCfg(); if ($('#sheet').classList.contains('open') && ui.screen === 'main') paint(); };
+  const viewsHtml = () => {
+    const views = [...hideViewsList()].sort(byName);
+    const cur = ui.cfg.view || null;
+    const rows = views.map((v) => `<div class="rl-rule rl-view">
+        <button class="picker-item ripple rl-wrap rl-view-pick" data-view="${esc(v.id)}">${radio(v.id === cur)}<span>${esc(v.name)}</span></button>
+        <button class="icon-btn small ripple" data-vren="${esc(v.id)}" aria-label="Cambiar el nombre">${icon('edit')}</button>
+        <button class="icon-btn small ripple" data-vdel="${esc(v.id)}" aria-label="Borrar la vista">${icon('delete')}</button>
+      </div>`).join('');
+    return `<div class="rl-head">Vista</div>
+      ${views.length ? `${rows}<div class="rl-rule rl-view"><button class="picker-item ripple rl-wrap rl-view-pick" data-view="">${radio(!cur)}<span>Sin vista (reglas sin nombre)</span></button></div>
+        <p class="sheet-text rl-small">${cur ? 'Los cambios de abajo se guardan solos en esta vista.' : 'Al elegir una vista, estas reglas sin nombre quedan guardadas para volver con «Sin vista».'} También se cambia desde ⋮ Menú.</p>`
+    : '<p class="sheet-text rl-small">Guardá estas reglas con un nombre («Trabajo», «Hogar») para cambiar entre ellas desde ⋮ Menú.</p>'}
+      <div class="sheet-actions"><button class="text-btn ripple" id="rl-vnew">${icon('add')}<span>Nueva vista con estas reglas</span></button></div>`;
+  };
+  const askViewName = async (title, value = '', skip = null) => {
+    const r = await openDialog({ title, input: true, value, placeholder: 'Ej.: Trabajo', ok: 'Guardar' });
+    const name = r?.value?.trim().slice(0, 40);
+    if (!name) return null;
+    if (hideViewsList().some((v) => v.id !== skip && v.name.toLowerCase() === name.toLowerCase())) { snackbar('Ya hay una vista con ese nombre'); return null; }
+    return name;
   };
   const radio = (on) => `<span class="radio${on ? ' on' : ''}"></span>`;
   const check = (on) => `<span class="checkbox ${on ? 'all' : 'none'}"></span>`;
@@ -3150,8 +3276,9 @@ function showRulesSettings() {
     return `<h2 class="sheet-title">Ocultar o mostrar por reglas</h2>
       <p class="sheet-text">Se aplican solo a la pantalla principal de Notas: en carpetas, etiquetas, archivo, recordatorios, compartidas y búsqueda las notas siguen apareciendo. Valen en todos tus dispositivos.</p>
       <button class="picker-item ripple at-switch" id="rl-on" role="switch" aria-checked="${c.on}"><span>Reglas activadas</span><span class="spacer"></span><span class="switch${c.on ? ' on' : ''}"></span></button>
+      ${viewsHtml()}
       <div class="at-opts${c.on ? '' : ' off'}">
-        <div class="rl-head">Qué hacer</div>
+        <div class="rl-head">Qué hacer${activeView(c) ? ` <span class="rl-vname">· vista «${esc(activeView(c).name)}»</span>` : ''}</div>
         ${item('data-mode="hide"', radio(c.mode !== 'show'), 'Ocultar las que cumplan las reglas')}
         ${item('data-mode="show"', radio(c.mode === 'show'), 'Mostrar solo las que cumplan las reglas')}
         ${c.rules.length > 1 ? `<div class="rl-head">Con varias reglas</div>
@@ -3231,7 +3358,39 @@ function showRulesSettings() {
       const on = (sel, fn) => body.querySelectorAll(sel).forEach((b) => b.addEventListener('click', () => fn(b)));
       if (ui.screen === 'main') {
         const c = ui.cfg;
-        on('#rl-on', () => { c.on = !c.on; save(); paint(); snackbar(c.on ? 'Reglas activadas' : 'Reglas apagadas: se ven todas las notas'); });
+        on('#rl-on', () => { c.on = !c.on; if (c.on) rulesPeek = false; save(); paint(); snackbar(c.on ? 'Reglas activadas' : 'Reglas apagadas: se ven todas las notas'); });
+        // Vistas con nombre
+        on('[data-view]', (b) => { applyView(b.dataset.view || null); reload(); });
+        on('#rl-vnew', async () => {
+          const name = await askViewName('Nueva vista');
+          if (!name) return;
+          const cur = rulesCfg();
+          const id = newViewId();
+          const views = [...hideViewsList(), { id, name, cfg: ruleCore(cur) }];
+          saveRules({ ...cur, view: id, loose: cur.view ? cur.loose : ruleCore(cur) }, views);
+          reload();
+          snackbar(`Vista «${name}» guardada y elegida`);
+        });
+        on('[data-vren]', async (b) => {
+          const v = hideViewsList().find((x) => x.id === b.dataset.vren);
+          if (!v) return;
+          const name = await askViewName('Nombre de la vista', v.name, v.id);
+          if (!name || name === v.name) return;
+          saveRules(rulesCfg(), hideViewsList().map((x) => (x.id === v.id ? { ...x, name } : x)));
+          reload();
+        });
+        on('[data-vdel]', (b) => {
+          const prevCfg = JSON.parse(JSON.stringify(rulesCfg()));
+          const prevViews = JSON.parse(JSON.stringify(hideViewsList()));
+          const v = prevViews.find((x) => x.id === b.dataset.vdel);
+          if (!v) return;
+          const cur = rulesCfg();
+          // Si era la elegida, sus reglas quedan como reglas sin nombre (la pantalla no cambia)
+          const next = cur.view === v.id ? { ...cur, view: null, loose: null } : cur;
+          saveRules(next, prevViews.filter((x) => x.id !== v.id));
+          reload();
+          snackbar(cur.view === v.id ? `Vista «${v.name}» borrada: sus reglas quedan sin nombre` : `Vista «${v.name}» borrada`, 'Deshacer', () => { saveRules(prevCfg, prevViews); reload(); });
+        });
         on('[data-mode]', (b) => { c.mode = b.dataset.mode; save(); paint(); });
         on('[data-combine]', (b) => { c.combine = b.dataset.combine; save(); paint(); });
         on('#rl-pinned', () => { c.keepPinned = !c.keepPinned; save(); paint(); });
