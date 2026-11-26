@@ -2,6 +2,7 @@
 
 > Archivo para retomar el trabajo en un chat nuevo.
 > Uso: *"Seguimos con ANote (repo notas), <pedido>. Leé `DESARROLLO.md` del repo luchorcompartidos/notas."*
+> Guía de dispositivos viejos: `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo **home** (no está en este repo; se lee con `git clone --depth 1 https://github.com/luchorcompartidos/home`).
 > Estructura según `plantilla/DESARROLLO.md` del repo home. Lo viejo va resumido en "Historial".
 > Al cerrar cada etapa: actualizar secciones 1, 2, 3 y 7, y subir el archivo al repo.
 
@@ -20,25 +21,16 @@
 | Dispositivos viejos (Android 5/6) | **Sí, hecho**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio. Partes 1 (v0.2.1), 2 (v0.2.2) y 3 (v0.2.6) cerradas: un solo APK anda en el celular, la tablet Android 6.0.1 y la Bangho (Android 5.0) |
 
 ## 2. Etapa actual
-**Tablas: selección de celdas sueltas, filas y columnas (v0.2.7). Falta que el usuario la pruebe en el celular, las tablets y la PC.**
-- Pedido (2026-11-26): que conjuntos de celdas, filas o columnas independientes (o una mezcla) se puedan seleccionar para aplicarles una acción, copiarlos o pegar sobre ellos, y que ande bien en el celular.
-- Definiciones del usuario:
-  - Pegar un bloque más grande que lo que queda de la tabla **agrega filas y columnas**.
-  - Copiar celdas salteadas: **las dos formas** (bloque y lista). El modo por defecto se elige en el menú lateral («Copiar celdas de tablas») y el otro está siempre en el menú de la selección.
-  - Todo junto, Release Patch.
-- Hecho en la v0.2.7 (detalle en la sección 6, "Selección de celdas"):
-  - **Entrar:** «☐ Seleccionar» en la barra de tabla, primera opción del menú de la celda, grupo «Selección» del panel «Tabla», o Ctrl + clic en la PC (suma la celda del cursor y la tocada).
-  - **Seleccionar:** tocar una celda la suma o la quita; letras arriba (columnas) y números a la izquierda (filas), como en una planilla, con un botón de esquina para toda la tabla; barra de arriba con «N celdas» (menú), «✓ Listo», «Fila N», «Columna X», «Rango», «Todo», «Invertir» y «Ninguna». En la PC, Shift + clic = rango.
-  - **Acciones** (barra de abajo, en lugar de la de formato, y menú al mantener apretada una celda): copiar, cortar, pegar, color de fondo y alineación, negrita, cursiva, subrayado, borrar contenido y eliminar las filas o columnas que toca la selección. Snackbar con «Deshacer».
-  - **Salir:** «✓ Listo», Atrás, Escape, tocar fuera de la tabla o escribir en el título.
-  - **Portapapeles:** en el APK, plugin propio `Portapapeles` (la WebView no deja leer el portapapeles). En la web, `navigator.clipboard`; si el navegador no deja leerlo, se abre un cuadro para pegar a mano.
-- Parte 3 de dispositivos viejos **cerrada** (2026-11-26): la v0.2.6 se probó con éxito en la Bangho (Android 5.0). Resultado anotado en `plantilla/APK-DISPOSITIVOS-VIEJOS.md` (repo home).
+**Sin etapa en curso.** La selección de celdas (v0.2.7) la probó el usuario el 2026-11-26 y anda bien dentro del alcance de su prueba; si aparece algo con el uso, lo reporta.
+- Último trabajo: selección de celdas sueltas, filas y columnas, con copiar/cortar (bloque o lista), pegar, formato y eliminar (detalle en las secciones 4 y 6, "Selección de celdas").
+- Dispositivos viejos: Partes 1, 2 y 3 cerradas (v0.2.6 probada con éxito en la Bangho con Android 5.0).
 
 ## 3. Próximos pasos
-1. **El usuario prueba la selección (v0.2.7)** en el celular, la tablet Android 6, la Bangho y la PC: entrar a «Seleccionar», tocar celdas, letras y números, «Rango», copiar como bloque y como lista y pegar en Sheets/Excel o WhatsApp, pegar desde Excel/Sheets sobre una celda (que agregue filas y columnas si hace falta), sobre varias celdas sueltas y un solo valor sobre muchas, color/alineación/negrita, borrar, eliminar filas o columnas, Deshacer y el ajuste «Copiar celdas de tablas». Corregir lo que aparezca.
+1. Corregir lo que el usuario reporte de la selección de celdas con el uso.
 2. Confirmar en la Bangho (Android 5.0), si no se probó todavía: inicio de sesión con Google, sincronización, recordatorios y exportar PDF (Play services de Android 5 no se actualiza desde 2024).
 3. Pruebas pendientes en el celular y en la tablet Android 6: inicio de sesión con Google, exportar/enviar PDF o docx, escribir arriba/debajo de una tabla, recordatorios, sincronización.
 4. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx; arrastrar con el dedo para seleccionar un rango.
+5. Opcional: App Links (sección 5), si el usuario lo quiere.
 
 ## 4. Decisiones tomadas
 - **Un solo código** para la web y Android (Capacitor), con el aspecto lo más parecido posible en las dos, que en Android se sienta nativa. Backend gratis (Firebase Spark) y hosting en GitHub.
@@ -79,8 +71,8 @@
 
 ## 5. Pendientes / dudas abiertas
 - [x] **APK para dispositivos viejos:** Partes 1 (v0.2.1), 2 (v0.2.2) y 3 (v0.2.6) hechas. Un solo APK con mínimo Android 5.0; probado en la Bangho (Android 5.0) y la tablet Android 6.0.1.
-- [ ] **Selección de celdas (v0.2.7):** falta la prueba del usuario (sección 3).
-- [ ] **App Links** (que el link de una nota abra la app en vez de la web). Requiere que el usuario cree el repo vacío `luchorcompartidos.github.io` (Claude no puede crear repos). Después hay que subir ahí `.well-known/assetlinks.json` con el paquete `io.github.luchorcompartidos.notas` y el SHA-256 de la firma: `F3:CC:EE:75:71:9A:9E:A6:13:FD:C2:0E:30:33:49:48:C3:1A:0C:67:77:60:B4:97:B5:C5:9C:3F:E3:AD:3B:D9`. Además hay que agregar en `patch-android.py` el intent-filter `autoVerify` para `https://luchorcompartidos.github.io/notas/`.
+- [x] **Selección de celdas (v0.2.7):** probada por el usuario el 2026-11-26, sin errores dentro del alcance de su prueba.
+- [ ] **App Links (opcional)**: hoy, al tocar un link de una nota ("Copiar (o Enviar) Link") en el celular, se abre la web en el navegador; con App Links Android lo abriría directo en la app ANote. Android solo lo permite si el sitio `luchorcompartidos.github.io` publica un archivo que "autorice" a la app, y ese archivo tiene que estar en la raíz del sitio, que corresponde al repo especial `luchorcompartidos.github.io` (no al repo notas). Requiere que el usuario cree el repo vacío `luchorcompartidos.github.io` (Claude no puede crear repos). Después hay que subir ahí `.well-known/assetlinks.json` con el paquete `io.github.luchorcompartidos.notas` y el SHA-256 de la firma: `F3:CC:EE:75:71:9A:9E:A6:13:FD:C2:0E:30:33:49:48:C3:1A:0C:67:77:60:B4:97:B5:C5:9C:3F:E3:AD:3B:D9`. Además hay que agregar en `patch-android.py` el intent-filter `autoVerify` para `https://luchorcompartidos.github.io/notas/`.
 - **Limitaciones conocidas:**
   - **Sin notificaciones push:** con la app cerrada no llegan los pedidos de acceso, ni las invitaciones, ni los recordatorios creados en otro dispositivo; se ven y se programan al abrir la app. Hacerlo requiere el plan Blaze (Cloud Functions + FCM).
   - **El bloqueo con huella no cifra:** solo oculta el contenido en la interfaz.
@@ -217,4 +209,4 @@ La tabla completa de versiones está en el `README.md`.
 | v0.2.4 (2026-11-25) | Tablas: escribir arriba de una tabla que está al principio de la nota, tocando entre el título y la tabla o con Enter en el título |
 | v0.2.5 (2026-11-25) | Atrapador de cierres: ante un cierre por error muestra el error con Copiar/Enviar (diagnóstico de la Bangho con Android 5.0) |
 | v0.2.6 (2026-11-25) | Android 5.0: arreglo del cierre al abrir (`@capacitor/status-bar` usaba `getRootWindowInsets`, de Android 6). Probada con éxito en la Bangho el 2026-11-26 (cierre de la Parte 3) |
-| v0.2.7 (2026-11-26) | Tablas: selección de celdas sueltas, filas y columnas (letras y números como en una planilla, rango, todo, invertir), con copiar/cortar como bloque o como lista (modo por defecto en el menú lateral), pegar (agrega filas y columnas si hace falta), color, alineación, negrita/cursiva/subrayado, borrar y eliminar filas o columnas. Plugin propio `Portapapeles` en el APK |
+| v0.2.7 (2026-11-26) | Tablas: selección de celdas sueltas, filas y columnas (letras y números como en una planilla, rango, todo, invertir), con copiar/cortar como bloque o como lista (modo por defecto en el menú lateral), pegar (agrega filas y columnas si hace falta), color, alineación, negrita/cursiva/subrayado, borrar y eliminar filas o columnas. Plugin propio `Portapapeles` en el APK. Probada por el usuario el 2026-11-26 |
