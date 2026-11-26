@@ -15,12 +15,12 @@
 | URL publicada | https://luchorcompartidos.github.io/notas/ |
 | Tipo | Web + Android (Capacitor, un solo código) |
 | Estado | En uso |
-| Última versión (Release) | v0.2.5 — 2026-11-25 |
+| Última versión (Release) | v0.2.6 — 2026-11-25 |
 | Se conecta con | Firebase, proyecto **notas-pro-2026** (plan gratuito Spark; Firestore en modo producción) |
-| Dispositivos viejos (Android 5/6) | **Sí**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio. Partes 1 (v0.2.1) y 2 (v0.2.2) hechas. Parte 3 en curso: la tablet Android 6 anda; la Bangho (Android 5.0) se cierra al abrir; v0.2.5 trae el atrapador de cierres para ver el error |
+| Dispositivos viejos (Android 5/6) | **Sí**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio. Partes 1 (v0.2.1) y 2 (v0.2.2) hechas. Parte 3 en curso: la tablet Android 6 anda; la Bangho (Android 5.0) se cerraba al abrir por `@capacitor/status-bar` (arreglado en v0.2.6, falta probar) |
 
 ## 2. Etapa actual
-**APK para dispositivos viejos (Android 5/6), Parte 3: la tablet Android 6 anda; la Bangho (Android 5.0) se cierra al abrir. v0.2.5 = atrapador de cierres para ver el error.**
+**APK para dispositivos viejos (Android 5/6), Parte 3: la tablet Android 6 anda. La Bangho (Android 5.0) se cerraba al abrir: v0.2.5 mostró el error y v0.2.6 lo arregla (falta probar).**
 - Objetivo: que ANote... se instale y ande en la tablet Android 6.0.1 (32 bits) y en la Bangho AERO J1216 (Android 5.0, Intel x86), sin perjudicar en nada el APK de los celulares actuales.
 - Diagnóstico (2026-11-25), resumido:
   - **Arquitectura:** el APK no tiene bibliotecas nativas (`lib/`): es **universal** (anda en armeabi-v7a y en x86, la Bangho lo corre sin traductor).
@@ -40,13 +40,16 @@
   - **Tablet Android 6.0.1:** abre bien (WebView 95 según "Versión").
   - **Bangho (Android 5.0):** WebView 95.0.4638.74, habilitada. Desde la v0.2.2 se instala pero al abrir sale "Se ha detenido la aplicación ANote...": se cae la parte nativa antes de cargar la web. Sospechas, en orden: puente de Cordova (API 22, forzado con `overrideLibrary`), alguna llamada de Capacitor 7 (pide oficialmente API 23) o algo que se inicia al arrancar (WebView, Firebase).
   - **v0.2.5:** atrapador de cierres (`AnoteApp` + `CierreActivity`, ver sección 6) para ver el error real en la Bangho.
-- En curso: esperando el texto del error de la Bangho (pantalla "ANote... se cerró por un error" → Copiar/Enviar).
+  - **Error en la Bangho (v0.2.5):** `NoSuchMethodError: View.getRootWindowInsets()` (API 23) en `StatusBar.getStatusBarHeight` de `@capacitor/status-bar` 7.0.6, llamado al cargar el plugin (`StatusBar.<init>` → `setOverlaysWebView` → `getInfo`). No era Cordova.
+  - **v0.2.6:** `patch-android.py` corrige `StatusBar.java` en `node_modules` (Gradle compila el plugin desde ahí): con `SDK_INT < 23` toma el alto del recurso `status_bar_height`. En Android 6+ el código no cambia. Verificado: el CI confirma el cambio (`assert`), el `classes.dex` creció 88 bytes y el APK sigue en `sdkVersion:'21'`.
+- En curso: esperando la prueba de la v0.2.6 en la Bangho. Si aparece otra función nueva, la pantalla de error la muestra.
 
 ## 3. Próximos pasos
-1. **El usuario instala la v0.2.5 en la Bangho** (encima de la anterior, misma firma), la abre y, en la pantalla "ANote... se cerró por un error", toca **Copiar** o **Enviar…** y le pasa el texto a Claude. Si en vez de esa pantalla sigue saliendo "Se ha detenido la aplicación", el cierre es nativo (por ejemplo, de la WebView) y hay que sacar el log con `adb logcat` desde la PC.
-2. **Parte 3, arreglo:** corregir según el error (si es Cordova: ver si se puede evitar su clase en el arranque o reemplazar la biblioteca; si es Capacitor: proteger la llamada con `SDK_INT`). Verificar que el celular y la tablet Android 6 sigan igual.
-3. Pruebas pendientes de la v0.2.4 en el celular y en la tablet Android 6: inicio de sesión con Google, exportar/enviar PDF o docx, escribir arriba/debajo de una tabla, recordatorios, sincronización.
-4. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx.
+1. **El usuario instala la v0.2.6 en la Bangho** (encima de la anterior, misma firma) y prueba: abrir, iniciar sesión con Google, sincronizar, crear un recordatorio y una tabla, exportar un PDF y ver "Versión". Si sale la pantalla "ANote... se cerró por un error", pasa el texto (Copiar/Enviar…) y se corrige igual que en la v0.2.6.
+2. **Parte 3, correcciones:** según lo que salga. Riesgos que quedan: inicio de sesión con Google en Android 5 (Play services sin actualizar desde 2024) y el puente de Cordova (`overrideLibrary`, API 22). Verificar que el celular y la tablet Android 6 sigan igual.
+3. Pruebas pendientes en el celular y en la tablet Android 6: inicio de sesión con Google, exportar/enviar PDF o docx, escribir arriba/debajo de una tabla, recordatorios, sincronización.
+4. Al cerrar la Parte 3: marcar la fila "Dispositivos viejos" como hecha y anotar el resultado en `plantilla/APK-DISPOSITIVOS-VIEJOS.md` (repo home).
+5. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx.
 
 ## 4. Decisiones tomadas
 - **Un solo código** para la web y Android (Capacitor), con el aspecto lo más parecido posible en las dos, que en Android se sienta nativa. Backend gratis (Firebase Spark) y hosting en GitHub.
@@ -75,11 +78,11 @@
   - **Un solo APK para todos** (no dos como en Flutter), siempre que no perjudique en nada al APK de los celulares actuales. Es posible porque el APK no tiene partes nativas por arquitectura y Capacitor 7 acepta bajar el mínimo desde `variables.gradle`.
   - Mínimo de WebView: **Chromium 94** (por `es2022`). No se baja el `target` de la web: en Android 5 la última WebView es la 95 y en Android 6 la 106.
   - Lo que falta en esas WebView se resuelve con **respaldos que solo se activan donde falta la función** (`@supports not`, detección de funciones), para que la web y el celular sigan exactamente igual.
-  - **Bibliotecas fijadas para Android 5.0 (v0.2.2):** `firebase-auth` 22.3.1 (`firebaseAuthVersion` en `variables.gradle`, desde `ci.yml`) y `@capacitor/filesystem` 7.0.1 (versión exacta en `package.json`); Cordova se acepta con `tools:overrideLibrary`. **No actualizar** esas dos versiones sin revisar que la nueva no pida más que API 21. Afectan también al APK de los celulares, pero sin cambio visible (la parte nativa de la autenticación solo trae la credencial de Google y la de archivos solo escribe en la caché).
+  - **Bibliotecas fijadas para Android 5.0 (v0.2.2):** `firebase-auth` 22.3.1 (`firebaseAuthVersion` en `variables.gradle`, desde `ci.yml`) y `@capacitor/filesystem` 7.0.1 (versión exacta en `package.json`); Cordova se acepta con `tools:overrideLibrary`. `@capacitor/status-bar` se corrige en `patch-android.py` (v0.2.6). **No actualizar** esas dos versiones sin revisar que la nueva no pida más que API 21. Afectan también al APK de los celulares, pero sin cambio visible (la parte nativa de la autenticación solo trae la credencial de Google y la de archivos solo escribe en la caché).
 - **Versiones:** cada pedido define el tipo de Release (la mayoría Patch; la v0.1.0 y la v0.2.0 fueron Minor; las tablas Parte A y B1 fueron Patch por elección del usuario). Si hay otras preguntas pendientes, el tipo de Release se pregunta al final; si no, se avanza con Patch y se avisa el número.
 
 ## 5. Pendientes / dudas abiertas
-- [ ] **APK para dispositivos viejos:** diagnóstico y Partes 1 (v0.2.1) y 2 (v0.2.2) hechos (ver sección 2). Esquema elegido: un solo APK con mínimo Android 5.0. Parte 3 en curso: Android 6 anda; Android 5.0 (Bangho) se cierra al abrir, diagnóstico con la v0.2.5.
+- [ ] **APK para dispositivos viejos:** diagnóstico y Partes 1 (v0.2.1) y 2 (v0.2.2) hechos (ver sección 2). Esquema elegido: un solo APK con mínimo Android 5.0. Parte 3 en curso: Android 6 anda; Android 5.0 (Bangho) se cerraba al abrir, arreglado en la v0.2.6 (falta probar).
 - [ ] **App Links** (que el link de una nota abra la app en vez de la web). Requiere que el usuario cree el repo vacío `luchorcompartidos.github.io` (Claude no puede crear repos). Después hay que subir ahí `.well-known/assetlinks.json` con el paquete `io.github.luchorcompartidos.notas` y el SHA-256 de la firma: `F3:CC:EE:75:71:9A:9E:A6:13:FD:C2:0E:30:33:49:48:C3:1A:0C:67:77:60:B4:97:B5:C5:9C:3F:E3:AD:3B:D9`. Además hay que agregar en `patch-android.py` el intent-filter `autoVerify` para `https://luchorcompartidos.github.io/notas/`.
 - **Limitaciones conocidas:**
   - **Sin notificaciones push:** con la app cerrada no llegan los pedidos de acceso, ni las invitaciones, ni los recordatorios creados en otro dispositivo; se ven y se programan al abrir la app. Hacerlo requiere el plan Blaze (Cloud Functions + FCM).
@@ -131,9 +134,9 @@ Vite 6 (target es2022, `base: './'`) + Capacitor 7. Todo el código de la app es
   - `BiometricPlugin` usa BiometricPrompt.
   - `AnoteApp` (Application, `android:name` del `<application>`) instala en `attachBaseContext` un `UncaughtExceptionHandler`: ante un cierre por error de Java arma un informe (versión, Android/API, equipo, ABI, hilo y traza), abre `CierreActivity` y termina el proceso. No se instala en el proceso `:cierre` (lo detecta por `/proc/self/cmdline`).
   - `CierreActivity` corre en el proceso aparte `:cierre`, con tema `Theme.Material.Light` y vistas de Android puras (sin Capacitor ni AndroidX), y muestra el error con "Copiar", "Enviar…" y "Cerrar". No atrapa cierres nativos (de la WebView, por ejemplo).
-- `patch-android.py` corre en cada compilación sobre el proyecto que genera `npx cap add android`. Agrega intent-filters (con los `pathPattern` de `.anote`), el receiver del widget, `android:name=".AnoteApp"` y `CierreActivity`, y la dependencia biometric.
+- `patch-android.py` corre en cada compilación sobre el proyecto que genera `npx cap add android` (y corrige `node_modules/@capacitor/status-bar/.../StatusBar.java` para Android 5: si el plugin cambia y el texto a reemplazar ya no está, el CI corta con error). Agrega intent-filters (con los `pathPattern` de `.anote`), el receiver del widget, `android:name=".AnoteApp"` y `CierreActivity`, y la dependencia biometric.
 
-**WebView viejas (Android 5/6):** al tocar CSS o JS, no usar nada que pida más de Chromium 94 sin respaldo. El APK tiene mínimo **Android 5.0 (API 21)**: si se agrega un plugin o una biblioteca nativa, verificar su `minSdk` (el CI corta con error si el APK no queda en `sdkVersion:'21'` y, si falla la compilación, lista las AAR con mínimo mayor). Lo que ya tiene respaldo: `color-mix` y `:has` (bloques `@supports not` al final de `styles.css`, con las clases `editor-open` y `with-drag`), pdfjs (`legacy`), `allowWhileIdle` (`IDLE_OK`). El aviso de WebView vieja es el `<script>` ES5 de `index.html`. Para revisar un APK: `grep` en `assets/public/assets/*.js` de `structuredClone`, `Promise.withResolvers`, `findLast`, `toSorted`, `Object.groupBy`, `AbortSignal.any` (en el paquete principal no tiene que aparecer ninguno sin control).
+**WebView viejas (Android 5/6):** al tocar CSS o JS, no usar nada que pida más de Chromium 94 sin respaldo. El APK tiene mínimo **Android 5.0 (API 21)**: si se agrega un plugin o una biblioteca nativa, verificar su `minSdk` (el CI corta con error si el APK no queda en `sdkVersion:'21'` y, si falla la compilación, lista las AAR con mínimo mayor). Si el APK se cierra en un Android viejo, la pantalla de `CierreActivity` muestra la función que falta (`NoSuchMethodError`); proteger esa llamada con `SDK_INT` (en un plugin, desde `patch-android.py`). Lo que ya tiene respaldo: `getRootWindowInsets` de `@capacitor/status-bar` (v0.2.6), `color-mix` y `:has` (bloques `@supports not` al final de `styles.css`, con las clases `editor-open` y `with-drag`), pdfjs (`legacy`), `allowWhileIdle` (`IDLE_OK`). El aviso de WebView vieja es el `<script>` ES5 de `index.html`. Para revisar un APK: `grep` en `assets/public/assets/*.js` de `structuredClone`, `Promise.withResolvers`, `findLast`, `toSorted`, `Object.groupBy`, `AbortSignal.any` (en el paquete principal no tiene que aparecer ninguno sin control).
 
 **Web:** `public/manifest.webmanifest` (PWA, con `file_handlers` para `.anote`). El service worker lo genera un plugin de Vite en `vite.config.js` y precachea lo que pesa menos de 400 KB.
 
@@ -203,3 +206,4 @@ La tabla completa de versiones está en el `README.md`.
 | v0.2.3 (2026-11-25) | Tablas: renglón vacío siempre debajo de una tabla (o imagen) al final de la nota, tocar debajo para escribir, y "Escribir arriba/debajo de la tabla" en el menú de la celda |
 | v0.2.4 (2026-11-25) | Tablas: escribir arriba de una tabla que está al principio de la nota, tocando entre el título y la tabla o con Enter en el título |
 | v0.2.5 (2026-11-25) | Atrapador de cierres: ante un cierre por error muestra el error con Copiar/Enviar (diagnóstico de la Bangho con Android 5.0) |
+| v0.2.6 (2026-11-25) | Android 5.0: arreglo del cierre al abrir (`@capacitor/status-bar` usaba `getRootWindowInsets`, de Android 6) |
