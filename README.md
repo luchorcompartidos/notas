@@ -45,6 +45,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | — | v0.3.7 | **Tablas: combinar y separar celdas**: con «Seleccionar», marcar un rectángulo → «Combinar celdas» (junta el contenido de todas, como Word y Google Docs); «Separar celdas» desde el mismo menú, el menú de la celda o el panel de la tabla (las nuevas heredan color y alineación). En la PC, Ctrl + M. La selección toma las celdas combinadas enteras |
 | — | v0.3.8 | **Tablas: operaciones con celdas combinadas**: eliminar filas o columnas que cruzan una combinada (se achica), insertar o duplicar una fila o columna en medio de una combinada (se agranda; conserva las combinadas de lo copiado), pegar agrandando la tabla y ordenar si las combinadas son solo a lo ancho (con alguna a lo alto, avisa) |
 | — | v0.3.9 | **Tablas: exportar celdas combinadas**: el PDF y el docx (Word) las dibujan combinadas, con el ancho de sus columnas y el alto de sus filas (en el PDF, las filas de una combinada a lo alto van juntas en la página y, si no entran, la celda sigue en la siguiente). En md, txt y WhatsApp el contenido va en la primera casilla y las demás quedan vacías. El docx exportado vuelve a entrar a ANote con las combinadas y solo la fila de encabezado como encabezado. En el PDF, el texto que sigue a una tabla ya no queda pegado a su borde |
+| — | v0.4.0 | **Administración de usuarios** (⋮ Menú → «Administración de usuarios», solo para el administrador): listado de los usuarios que abrieron ANote (nombre, correo, cómo entra, último uso, dispositivo y versión), con búsqueda y filtros; elegir uno, varios o todos para **cerrarles la sesión en todos sus dispositivos** o **pedirles pasar a la contraseña propia** (sugerido: aviso una vez por día; obligatorio: no pueden usar la app hasta terminar el cambio), quitar el pedido o quitarlos del listado. Reglas nuevas (`admins`, `directory`, `control`) |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web. Desde la v0.3.0 también se puede entrar con correo y contraseña propia de ANote (en la web y en el APK, sin plugin nativo).
 
@@ -58,6 +59,7 @@ Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza 
   - `notes/{id}/updates/*`: cambios de Yjs; se compactan cuando pasan de 40
   - `users/{uid}/meta/{id}`: organización personal (color, fijada, papelera)
   - `security/{uid}`: marca «solo contraseña propia» (v0.3.0); la ponen o la quitan solo quienes entraron con la contraseña en los últimos 10 minutos
+  - `admins/{uid}`, `directory/{uid}` y `control/{uid}` (v0.4.0): administradores (se crean a mano en la consola), ficha de cada usuario para el listado y pedidos del administrador (cerrar sesión, pasar a contraseña propia)
 - Las reglas de seguridad están en `firestore.rules` (se pegan en la consola de Firebase cada vez que cambian).
 - Compartir: `invites/{idNota}_{email}` guarda la invitación; al aceptarla, la persona se agrega a `memberIds` con el rol indicado.
 
