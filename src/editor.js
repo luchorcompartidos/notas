@@ -719,7 +719,7 @@ export function selState(editor) {
   const table = s && tableAt(editor.state.doc, s.tablePos);
   if (!table) return null;
   const map = TableMap.get(table);
-  return { ...s, table, map, rows: map.height, cols: map.width };
+  return { ...s, table, map, rows: map.height, cols: map.width, spans: tableSpans(table, map) };
 }
 function setSel(editor, value) { editor.view.dispatch(editor.state.tr.setMeta(selKey, value)); }
 
@@ -749,7 +749,9 @@ export function cellAtDom(editor, el) {
 export function startSelection(editor, hit = null) {
   const st = editor.state;
   if (hit) {
-    setSel(editor, { tablePos: hit.tablePos, cells: new Set([Sel.cellKey(hit.r, hit.c)]), anchor: { r: hit.r, c: hit.c } });
+    const t = tableAt(st.doc, hit.tablePos);
+    const cells = Sel.normalizeSpans(new Set([Sel.cellKey(hit.r, hit.c)]), t ? tableSpans(t) : []);
+    setSel(editor, { tablePos: hit.tablePos, cells, anchor: { r: hit.r, c: hit.c } });
     return true;
   }
   const ctx = tableContext(st);
@@ -758,7 +760,7 @@ export function startSelection(editor, hit = null) {
   if (st.selection instanceof CellSelection) {
     st.selection.forEachCell((_n, pos) => { const r = ctx.map.findCell(pos - ctx.tableStart); cells.add(Sel.cellKey(r.top, r.left)); });
   } else if (ctx.cellPos != null) cells.add(Sel.cellKey(ctx.rect.top, ctx.rect.left));
-  setSel(editor, { tablePos: ctx.tablePos, cells, anchor: { r: ctx.rect.top, c: ctx.rect.left } });
+  setSel(editor, { tablePos: ctx.tablePos, cells: Sel.normalizeSpans(cells, tableSpans(ctx.table, ctx.map)), anchor: { r: ctx.rect.top, c: ctx.rect.left } });
   return true;
 }
 export function endSelection(editor) { if (selKey.getState(editor.state)) setSel(editor, null); }
@@ -772,8 +774,9 @@ export function updateSelection(editor, op, hit = null) {
   let cells = new Set(s.cells); let anchor = s.anchor;
   const at = hit || anchor || { r: 0, c: 0 };
   switch (op) {
+    // Una celda combinada se suma o se quita entera (normalizeSpans, al final).
     case 'toggle': { const k = Sel.cellKey(at.r, at.c); if (cells.has(k)) cells.delete(k); else cells.add(k); anchor = { r: at.r, c: at.c }; break; }
-    case 'range': cells = Sel.addRange(cells, anchor || at, at); anchor = { r: at.r, c: at.c }; break;
+    case 'range': cells = Sel.addRangeSpans(cells, anchor || at, at, s.spans); anchor = { r: at.r, c: at.c }; break;
     case 'row': cells = Sel.toggleLine(cells, 'row', at.r, s.rows, s.cols); anchor = { r: at.r, c: anchor?.c ?? 0 }; break;
     case 'col': cells = Sel.toggleLine(cells, 'col', at.c, s.rows, s.cols); anchor = { r: anchor?.r ?? 0, c: at.c }; break;
     case 'all': cells = Sel.allKeys(s.rows, s.cols); break;
@@ -781,6 +784,7 @@ export function updateSelection(editor, op, hit = null) {
     case 'none': cells = new Set(); break;
     default: return false;
   }
+  cells = Sel.normalizeSpans(cells, s.spans, s.cells);
   setSel(editor, { tablePos: s.tablePos, cells, anchor });
   return true;
 }
@@ -790,7 +794,8 @@ export function updateSelection(editor, op, hit = null) {
 export function dragSelection(editor, base, from, to) {
   const s = selState(editor);
   if (!s || !to || to.tablePos !== s.tablePos) return false;
-  setSel(editor, { tablePos: s.tablePos, cells: Sel.addRange(new Set(base), from, to), anchor: { r: to.r, c: to.c } });
+  // El rectángulo se agranda para no cortar celdas combinadas (v0.3.7).
+  setSel(editor, { tablePos: s.tablePos, cells: Sel.addRangeSpans(new Set(base), from, to, s.spans), anchor: { r: to.r, c: to.c } });
   return true;
 }
 
@@ -798,7 +803,11 @@ export function dragSelection(editor, base, from, to) {
 export function selectionInfo(editor) {
   const s = selState(editor);
   if (!s) return null;
-  return { count: s.cells.size, nRows: s.rows, nCols: s.cols, anchor: s.anchor, merged: hasMerged(s.table), ...Sel.lines(s.cells, s.rows, s.cols) };
+  // count = celdas (una combinada cuenta una vez); slots = casillas de la grilla.
+  return {
+    count: selCellPositions(s).length, slots: s.cells.size, nRows: s.rows, nCols: s.cols, anchor: s.anchor,
+    merged: s.spans.length > 0, merge: Sel.mergeInfo(s.cells, s.spans), ...Sel.lines(s.cells, s.rows, s.cols),
+  };
 }
 
 // Posiciones (en el documento) de las celdas seleccionadas, de la última a la primera (así no se corren al cambiarlas).
@@ -892,12 +901,19 @@ export function selCopy(editor, mode = 'block') {
   if (!s || !s.cells.size) return null;
   const layout = Sel.copyLayout(s.cells, mode);
   const node = ({ r, c }) => s.table.nodeAt(s.map.map[r * s.cols + c]);
-  const texts = layout.map((row) => row.map((p) => (p ? cellText(node(p)) : '')));
-  const grid = layout.map((row) => row.map((p) => (p ? node(p).toJSON() : null)));
+  // Una celda combinada lleva su contenido en la casilla de arriba a la izquierda; las otras van vacías (como Excel).
+  const covered = ({ r, c }) => { const sp = Sel.spanAt(s.spans, r, c); return !!sp && (sp.top !== r || sp.left !== c); };
+  const texts = layout.map((row) => row.map((p) => (p && !covered(p) ? cellText(node(p)) : '')));
+  const grid = layout.map((row) => row.map((p) => {
+    if (!p) return null;
+    const j = node(p).toJSON();
+    return covered(p) ? { ...j, content: [{ type: 'paragraph' }] } : j;
+  }));
   // Un valor con varios renglones va entre comillas (como Excel), para que siga siendo un solo valor.
   const text = Sel.toTSV(texts);
-  cellClip = { text: normText(text), grid, mode, count: s.cells.size, h: layout.length, w: layout[0]?.length || 0 };
-  return { text, mode, count: s.cells.size, h: cellClip.h, w: cellClip.w };
+  const count = selCellPositions(s).length;
+  cellClip = { text: normText(text), grid, mode, count, h: layout.length, w: layout[0]?.length || 0 };
+  return { text, mode, count, h: cellClip.h, w: cellClip.w };
 }
 
 // Agrega columnas a la derecha y filas abajo hasta llegar a rows × cols.
@@ -951,7 +967,8 @@ export function selPaste(editor, text) {
     const rows = Sel.parseTSV(text || '');
     src = rows.map((row) => row.map((v) => ({ text: v })));
   }
-  const plan = Sel.pastePlan(src, s.cells);
+  // Con celdas combinadas, una selección que no es un rectángulo usa una casilla por celda (la de arriba a la izquierda).
+  const plan = Sel.pastePlan(src, s.spans.length && !Sel.isRect(s.cells) ? Sel.anchorKeys(s.cells, s.spans) : s.cells);
   if (!plan.cells.length) return { ok: false, reason: 'empty', plan };
   const tr = editor.state.tr;
   let grew = false;
@@ -965,7 +982,18 @@ export function selPaste(editor, text) {
   const start = s.tablePos + 1;
   const para = (t) => schema.nodes.paragraph.create(null, t ? schema.text(t) : null);
   const jobs = new Map();
-  plan.cells.forEach(({ r, c, v }) => { if (r < map.height && c < map.width) jobs.set(start + map.map[r * map.width + c], v); });
+  // Un valor que cae en una casilla tapada por una celda combinada (no la de arriba a la izquierda) no se pega;
+  // se cuenta (skipped) si es distinto del que va en esa celda.
+  const dropped = [];
+  plan.cells.forEach(({ r, c, v }) => {
+    if (r >= map.height || c >= map.width) return;
+    const rel = map.map[r * map.width + c];
+    const cr = map.findCell(rel);
+    if (cr.top !== r || cr.left !== c) { dropped.push([start + rel, v]); return; }
+    jobs.set(start + rel, v);
+  });
+  const same = (a, b) => !!a && !!b && JSON.stringify(a) === JSON.stringify(b);
+  const skipped = dropped.filter(([p, v]) => !same(jobs.get(p), v)).length;
   [...jobs.keys()].sort((a, b) => b - a).forEach((pos) => {
     const v = jobs.get(pos);
     const cell = tr.doc.nodeAt(pos);
@@ -985,11 +1013,11 @@ export function selPaste(editor, text) {
     if (attrs !== cell.attrs) tr.setNodeMarkup(pos, null, attrs);
   });
   // Queda seleccionado lo que se pegó.
-  const cells = new Set(plan.cells.map(({ r, c }) => Sel.cellKey(r, c)));
+  const cells = Sel.normalizeSpans(new Set(plan.cells.map(({ r, c }) => Sel.cellKey(r, c))), tableSpans(table, map));
   const first = plan.cells[0];
   tr.setMeta(selKey, { tablePos: s.tablePos, cells, anchor: { r: first.r, c: first.c } });
   editor.view.dispatch(tr);
-  return { ok: true, plan, grew, fromClip: useClip };
+  return { ok: true, plan, grew, fromClip: useClip, skipped };
 }
 
 // Elimina las filas ('rows') o columnas ('cols') que toca la selección. Si son todas, elimina la tabla.
@@ -1022,6 +1050,187 @@ export function selDeleteLines(editor, kind) {
   if (t) tr.setSelection(TextSelection.near(tr.doc.resolve(s.tablePos + 2)));
   editor.view.dispatch(tr);
   return { ok: true, list };
+}
+
+/* ---------- Tablas: combinar y separar celdas (v0.3.7) ---------- */
+// Celdas combinadas de la tabla como rectángulos inclusive { top, left, bottom, right } (para seleccion.js).
+function tableSpans(table, map = TableMap.get(table)) {
+  const out = []; const seen = new Set();
+  map.map.forEach((p) => {
+    if (seen.has(p)) return;
+    seen.add(p);
+    const r = map.findCell(p);
+    if (r.right - r.left > 1 || r.bottom - r.top > 1) out.push({ top: r.top, left: r.left, bottom: r.bottom - 1, right: r.right - 1 });
+  });
+  return out;
+}
+const isMergedCell = (n) => !!n && (n.attrs.colspan > 1 || n.attrs.rowspan > 1);
+const cellEmpty = (cell) => cell.childCount === 1 && cell.firstChild.isTextblock && cell.firstChild.childCount === 0;
+
+// Combina el rectángulo R (inclusive, sin cortar combinadas) de la tabla en tablePos. Como Word y Google Docs:
+// queda la celda de arriba a la izquierda (tipo, color y alineación) con el contenido de todas, una debajo de la otra
+// (las vacías no suman renglones). Los anchos de las columnas se conservan en `colwidth`. Devuelve cuántas celdas se juntaron.
+function mergeRectTr(tr, tablePos, R) {
+  const table = tr.doc.nodeAt(tablePos);
+  const map = TableMap.get(table);
+  const start = tablePos + 1; const w = map.width;
+  const widths = []; let anyW = false;
+  for (let c = R.left; c <= R.right; c++) {
+    const rel = map.map[R.top * w + c];
+    const v = table.nodeAt(rel).attrs.colwidth?.[c - map.findCell(rel).left] || 0;
+    widths.push(v);
+    if (v) anyW = true;
+  }
+  const seen = new Set(); const others = [];
+  let first = null;
+  for (let r = R.top; r <= R.bottom; r++) {
+    for (let c = R.left; c <= R.right; c++) {
+      const rel = map.map[r * w + c];
+      if (seen.has(rel)) continue;
+      seen.add(rel);
+      const cell = table.nodeAt(rel);
+      if (!first) first = { rel, cell }; else others.push({ rel, cell });
+    }
+  }
+  if (!first || !others.length) return 0;
+  const extra = [];
+  others.forEach(({ cell }) => { if (!cellEmpty(cell)) cell.content.forEach((n) => extra.push(n)); });
+  // La de arriba a la izquierda es la primera del documento: se borran las otras de la última a la primera.
+  others.slice().sort((a, b) => b.rel - a.rel).forEach(({ rel, cell }) => tr.delete(start + rel, start + rel + cell.nodeSize));
+  const fpos = start + first.rel;
+  if (extra.length) {
+    if (cellEmpty(first.cell)) tr.replaceWith(fpos + 1, fpos + first.cell.nodeSize - 1, extra);
+    else tr.insert(fpos + first.cell.nodeSize - 1, extra);
+  }
+  tr.setNodeMarkup(fpos, null, {
+    ...first.cell.attrs, colspan: R.right - R.left + 1, rowspan: R.bottom - R.top + 1, colwidth: anyW ? widths : null,
+  });
+  return others.length + 1;
+}
+
+// Separa las celdas combinadas (posiciones relativas a la tabla). Como prosemirror-tables (splitCell): el contenido
+// queda en la de arriba a la izquierda y las nuevas heredan el tipo, el color y la alineación; cada una con el ancho
+// de su columna. Se recorren de la última a la primera (las inserciones quedan siempre después). Devuelve cuántas.
+function splitCellsTr(tr, tablePos, rels) {
+  let n = 0;
+  [...new Set(rels)].sort((a, b) => b - a).forEach((rel) => {
+    const table = tr.doc.nodeAt(tablePos);
+    const map = TableMap.get(table);
+    const start = tablePos + 1;
+    const cell = table.nodeAt(rel);
+    if (!isMergedCell(cell)) return;
+    const R = map.findCell(rel);
+    const cw = cell.attrs.colwidth;
+    const base = { ...cell.attrs, colspan: 1, rowspan: 1 };
+    const attrs = [];
+    for (let i = 0; i < R.right - R.left; i++) attrs.push({ ...base, colwidth: cw && cw[i] ? [cw[i]] : null });
+    const m0 = tr.mapping.maps.length;
+    for (let row = R.top; row < R.bottom; row++) {
+      let pos = map.positionAt(row, R.left, table);
+      if (row === R.top) pos += cell.nodeSize;
+      for (let col = R.left, i = 0; col < R.right; col++, i++) {
+        if (row === R.top && col === R.left) continue;
+        tr.insert(tr.mapping.slice(m0).map(start + pos, 1), cell.type.createAndFill(attrs[i]));
+      }
+    }
+    tr.setNodeMarkup(start + rel, null, attrs[0]);
+    n++;
+  });
+  return n;
+}
+
+// Modo selección: ¿se puede combinar o separar? { canMerge, canSplit, splitCount, rect, reason }.
+export function selMergeInfo(editor) {
+  const s = selState(editor);
+  return s ? Sel.mergeInfo(s.cells, s.spans) : null;
+}
+
+export function selMerge(editor) {
+  const s = selState(editor);
+  if (!s) return { ok: false };
+  const info = Sel.mergeInfo(s.cells, s.spans);
+  if (!info.canMerge) return { ok: false, reason: info.reason };
+  const tr = editor.state.tr;
+  const n = mergeRectTr(tr, s.tablePos, info.rect);
+  if (!n) return { ok: false, reason: 'Elegí dos celdas o más' };
+  // Queda seleccionada la celda combinada (las mismas casillas).
+  tr.setMeta(selKey, { tablePos: s.tablePos, cells: new Set(s.cells), anchor: { r: info.rect.top, c: info.rect.left } });
+  editor.view.dispatch(tr);
+  return { ok: true, count: n, rows: info.rect.bottom - info.rect.top + 1, cols: info.rect.right - info.rect.left + 1 };
+}
+
+export function selSplit(editor) {
+  const s = selState(editor);
+  if (!s) return { ok: false };
+  const rels = [];
+  s.cells.forEach((k) => {
+    const { r, c } = Sel.parseKey(k);
+    if (r >= s.rows || c >= s.cols) return;
+    const rel = s.map.map[r * s.cols + c];
+    if (isMergedCell(s.table.nodeAt(rel))) rels.push(rel);
+  });
+  if (!rels.length) return { ok: false, reason: 'No hay celdas combinadas en la selección' };
+  const tr = editor.state.tr;
+  const n = splitCellsTr(tr, s.tablePos, rels);
+  // Quedan seleccionadas todas las celdas que salieron (las mismas casillas).
+  tr.setMeta(selKey, { tablePos: s.tablePos, cells: new Set(s.cells), anchor: s.anchor });
+  editor.view.dispatch(tr);
+  return { ok: true, count: n };
+}
+
+// Fuera del modo selección: la celda del cursor o la selección rectangular hecha con el mouse.
+function cursorRect(state) {
+  const ctx = tableContext(state);
+  if (!ctx) return null;
+  const sel = state.selection;
+  if (sel instanceof CellSelection) {
+    const r = ctx.map.rectBetween(sel.$anchorCell.pos - ctx.tableStart, sel.$headCell.pos - ctx.tableStart);
+    return { ctx, R: { top: r.top, left: r.left, bottom: r.bottom - 1, right: r.right - 1 }, multi: true };
+  }
+  if (ctx.cellPos == null) return null;
+  const r = ctx.rect;
+  return { ctx, R: { top: r.top, left: r.left, bottom: r.bottom - 1, right: r.right - 1 }, multi: false };
+}
+
+export function cellMergeInfo(editor) {
+  const x = editor && !editor.isDestroyed ? cursorRect(editor.state) : null;
+  if (!x) return null;
+  return { ...Sel.mergeInfo(new Set(Sel.rectKeys(x.R)), tableSpans(x.ctx.table, x.ctx.map)), multi: x.multi };
+}
+
+// Pone el cursor al final del contenido de la celda (relativa a la tabla).
+function cursorInCell(tr, tablePos, rel) {
+  const cell = tr.doc.nodeAt(tablePos + 1 + rel);
+  if (cell) tr.setSelection(TextSelection.near(tr.doc.resolve(tablePos + 1 + rel + cell.nodeSize - 1), -1));
+}
+
+export function mergeCursor(editor) {
+  const x = cursorRect(editor.state);
+  if (!x) return { ok: false };
+  const info = Sel.mergeInfo(new Set(Sel.rectKeys(x.R)), tableSpans(x.ctx.table, x.ctx.map));
+  if (!info.canMerge) return { ok: false, reason: info.reason };
+  const tr = editor.state.tr;
+  const n = mergeRectTr(tr, x.ctx.tablePos, info.rect);
+  if (!n) return { ok: false, reason: 'Elegí dos celdas o más' };
+  const table = tr.doc.nodeAt(x.ctx.tablePos);
+  const map = TableMap.get(table);
+  cursorInCell(tr, x.ctx.tablePos, map.map[info.rect.top * map.width + info.rect.left]);
+  editor.view.dispatch(tr);
+  return { ok: true, count: n, rows: info.rect.bottom - info.rect.top + 1, cols: info.rect.right - info.rect.left + 1 };
+}
+
+export function splitCursor(editor) {
+  const x = cursorRect(editor.state);
+  if (!x) return { ok: false };
+  const { ctx, R } = x;
+  const rels = ctx.map.cellsInRect({ left: R.left, top: R.top, right: R.right + 1, bottom: R.bottom + 1 })
+    .filter((rel) => isMergedCell(ctx.table.nodeAt(rel)));
+  if (!rels.length) return { ok: false, reason: 'La celda no está combinada' };
+  const tr = editor.state.tr;
+  const n = splitCellsTr(tr, ctx.tablePos, rels);
+  cursorInCell(tr, ctx.tablePos, Math.min(...rels));
+  editor.view.dispatch(tr);
+  return { ok: true, count: n };
 }
 
 // Extensiones del contenido (las mismas para mostrar versiones y exportar)

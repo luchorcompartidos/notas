@@ -10,6 +10,7 @@ import {
   needsTrailingParagraph, writeAtEnd, needsLeadingParagraph, writeAtStart,
   selState, cellAtDom, startSelection, endSelection, updateSelection, dragSelection, selectionInfo, selApplyAttrs, selCommonAttrs,
   selToggleMark, selClear, selCopy, selPaste, selDeleteLines, getCellClip,
+  selMerge, selSplit, cellMergeInfo, mergeCursor, splitCursor,
 } from './editor.js';
 import { colName, listText } from './seleccion.js';
 import * as Y from 'yjs';
@@ -1144,6 +1145,7 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
   openSheet(`
     <h2 class="sheet-title">${icon('table')} Tabla <small class="ver">${ctx.cols} ${ctx.cols === 1 ? 'columna' : 'columnas'} × ${ctx.rows} ${ctx.rows === 1 ? 'fila' : 'filas'} · estás en la fila ${ctx.row}, columna ${ctx.col}</small></h2>
     <div class="tbl-group"><h3>Selección</h3><div class="chips-row">${act('select', 'Seleccionar celdas, filas o columnas…', ' chip-on')}</div></div>
+    ${mergeGroup()}
     <div class="tbl-group"><h3>Filas</h3><div class="chips-row">${act('rowBefore', '+ Insertar arriba')}${act('rowAfter', '+ Insertar abajo')}${act('copyRow', `Copiar fila ${ctx.row}`)}${act('dupRow', 'Duplicar fila')}${clipRow ? act('pasteRowBefore', '⤒ Insertar copiada arriba', ' chip-on') + act('pasteRowAfter', '⤓ Insertar copiada abajo', ' chip-on') : ''}${act('deleteRow', '− Eliminar fila', ' danger')}</div></div>
     <div class="tbl-group"><h3>Columnas</h3><div class="chips-row">${act('colBefore', '+ Insertar a la izquierda')}${act('colAfter', '+ Insertar a la derecha')}${act('copyCol', `Copiar columna ${ctx.col}`)}${act('dupCol', 'Duplicar columna')}${clipCol ? act('pasteColBefore', '⇤ Insertar copiada a la izquierda', ' chip-on') + act('pasteColAfter', '⇥ Insertar copiada a la derecha', ' chip-on') : ''}${act('deleteCol', '− Eliminar columna', ' danger')}</div></div>
     ${clipNote}
@@ -1166,7 +1168,7 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
     </div>
     <div class="tbl-group"><h3>Encabezado</h3><div class="chips-row">${act('headerRow', `${ctx.headerRow ? '✓ ' : ''}Fila de encabezado`, ctx.headerRow ? ' chip-on' : '')}${act('headerCol', `${ctx.headerCol ? '✓ ' : ''}Columna de encabezado`, ctx.headerCol ? ' chip-on' : '')}</div></div>
     <div class="tbl-group"><h3>Tabla</h3><div class="chips-row">${act('textBefore', 'Escribir arriba de la tabla')}${act('textAfter', 'Escribir debajo de la tabla')}${act('duplicate', 'Duplicar tabla')}${act('deleteTable', 'Eliminar tabla', ' danger')}</div></div>
-    <p class="sheet-text tbl-tip">Con teclado: Tab pasa a la celda siguiente y, en la última, agrega una fila. Podés pegar celdas copiadas de Excel o Google Sheets y se arma la tabla. Dentro de una celda podés usar casillas, listas y formato. En la PC, el ancho de una columna también se cambia arrastrando su borde. En el celular, mantené apretada una celda para ver su menú (en la PC, clic derecho; Shift + clic derecho abre el menú del navegador). Para elegir varias celdas sueltas, filas o columnas: «Seleccionar» (en la PC también Ctrl + clic); ahí, para un rango, apoyá el dedo un instante en una celda y arrastrá (con el mouse, apretá y arrastrá).</p>
+    <p class="sheet-text tbl-tip">Con teclado: Tab pasa a la celda siguiente y, en la última, agrega una fila. Podés pegar celdas copiadas de Excel o Google Sheets y se arma la tabla. Dentro de una celda podés usar casillas, listas y formato. En la PC, el ancho de una columna también se cambia arrastrando su borde. En el celular, mantené apretada una celda para ver su menú (en la PC, clic derecho; Shift + clic derecho abre el menú del navegador). Para elegir varias celdas sueltas, filas o columnas: «Seleccionar» (en la PC también Ctrl + clic); ahí, para un rango, apoyá el dedo un instante en una celda y arrastrá (con el mouse, apretá y arrastrá). Para combinar celdas, seleccioná un rectángulo y elegí «Combinar celdas» en el menú de la selección (en la PC, Ctrl + M); una combinada se separa desde ese menú, el de la celda o este panel.</p>
   `, (body) => {
     // Al volver a dibujar el panel se mantiene el desplazamiento (si no, salta arriba en cada toque).
     const reopen = () => {
@@ -1231,6 +1233,7 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
         return;
       }
       if (cmd.startsWith('sort')) { doSort(cmd); reopen(); return; }
+      if (cmd === 'merge' || cmd === 'split') { doMergeCursor(cmd); reopen(); return; }
       runTableCommand(editor, cmd, { focus: false });
       if (cmd === 'duplicate') snackbar('Tabla duplicada debajo');
       reopen();
@@ -1241,6 +1244,24 @@ function openTableSheet({ scrollTo = null, keepScroll = false } = {}) {
   else if (scrollTo === 'cells') $('#tbl-cells-group')?.scrollIntoView({ block: 'start' });
   else if (scrollTo === 'sort') $('#tbl-sort-group')?.scrollIntoView({ block: 'start' });
   else $('#sheet').scrollTop = 0;
+}
+
+// Combinar y separar (v0.3.7) en el panel de tabla: la celda del cursor o la selección hecha con el mouse.
+function mergeGroup() {
+  const m = cellMergeInfo(editor);
+  if (!m || (!m.canMerge && !m.canSplit)) return '';
+  const b = [];
+  if (m.canMerge) b.push(`<button class="chip ripple tbl-act" data-act="merge"><span>${icon('cellMerge')} Combinar las celdas marcadas</span></button>`);
+  if (m.canSplit) b.push(`<button class="chip ripple tbl-act" data-act="split"><span>${icon('cellSplit')} ${m.multi ? 'Separar las celdas combinadas' : 'Separar la celda'}</span></button>`);
+  return `<div class="tbl-group"><h3>Celdas combinadas</h3><div class="chips-row">${b.join('')}</div></div>`;
+}
+const mergedMsg = (r) => `${plural(r.count, 'celda combinada', 'celdas combinadas')} en una (${plural(r.cols, 'columna', 'columnas')} × ${plural(r.rows, 'fila', 'filas')})`;
+const splitMsg = (r) => (r.count === 1 ? 'Celda separada' : `${r.count} celdas separadas`);
+function doMergeCursor(cmd) {
+  const r = cmd === 'merge' ? mergeCursor(editor) : splitCursor(editor);
+  if (!r.ok) { if (r.reason) snackbar(`No se puede ${cmd === 'merge' ? 'combinar' : 'separar'}: ${r.reason.toLowerCase()}`); return; }
+  haptic();
+  snackbar(cmd === 'merge' ? mergedMsg(r) : splitMsg(r), 'Deshacer', () => editor?.chain().focus().undo().run());
 }
 
 const BG_LABEL = {};
@@ -1274,6 +1295,7 @@ function openCellMenu(x, y) {
     { label: '↓ Escribir debajo de la tabla', onClick: run(() => runTableCommand(editor, 'textAfter')) },
     { divider: true },
     { label: `${icon('palette')} Color de fondo…`, onClick: run(() => openTableSheet({ scrollTo: 'cells' })) },
+    ...mergeMenuItems(run),
     { divider: true },
     { label: `Copiar fila ${ctx.row}`, onClick: run(() => { const c = copyTablePart(editor, 'row'); if (c) snackbar(`Fila ${c.index} copiada`); }) },
     { label: `Copiar columna ${ctx.col}`, onClick: run(() => { const c = copyTablePart(editor, 'col'); if (c) snackbar(`Columna ${c.index} copiada`); }) },
@@ -1304,6 +1326,14 @@ function openCellMenu(x, y) {
   cellMenuAt = Date.now();
 }
 let cellMenuAt = 0;
+// Menú de la celda: «Combinar celdas» con una selección hecha con el mouse, «Separar celda» si está combinada.
+function mergeMenuItems(run) {
+  const m = cellMergeInfo(editor);
+  const out = [];
+  if (m?.canMerge && m.multi) out.push({ label: `${icon('cellMerge')} Combinar celdas`, onClick: run(() => doMergeCursor('merge')) });
+  if (m?.canSplit) out.push({ label: `${icon('cellSplit')} ${m.multi ? 'Separar celdas' : 'Separar celda'}`, onClick: run(() => doMergeCursor('split')) });
+  return out;
+}
 
 function bindCellPress() {
   const host = $('#editor');
@@ -1440,7 +1470,7 @@ function drawSelHandles() {
     const rr = tr.getBoundingClientRect();
     html.push(`<button class="sel-handle${cls('r', i)}" data-hrow="${i}" aria-label="Fila ${i + 1}" style="left:${Math.round(vis.left - base.left + 1)}px;top:${Math.round(rr.top - base.top + 1)}px;width:${W}px;height:${Math.max(18, Math.round(rr.height - 2))}px">${i + 1}</button>`);
   });
-  const allOn = info.count === s.rows * s.cols;
+  const allOn = info.slots === s.rows * s.cols;
   html.push(`<button class="sel-handle corner${allOn ? ' on' : ''}" data-hall="1" aria-label="${allOn ? 'Quitar la selección' : 'Seleccionar toda la tabla'}" style="left:${Math.round(vis.left - base.left + 1)}px;top:${Math.round(tTop - base.top - H - 3)}px;width:${W}px;height:${H}px">${icon('selectAll')}</button>`);
   layer.innerHTML = html.join('');
   layer.hidden = false;
@@ -1490,6 +1520,7 @@ async function selDoPaste(text) {
     if (p.total > p.used) msg += ` (sobraron ${p.total - p.used})`;
     else if (p.targets > p.used) msg += ` (${plural(p.targets - p.used, 'celda quedó', 'celdas quedaron')} sin cambiar)`;
   } else msg = `${plural(p.cells.length, 'celda pegada', 'celdas pegadas')}${r.grew ? ' (se agregaron filas o columnas)' : ''}`;
+  if (r.skipped) msg += `. ${r.skipped === 1 ? '1 valor no se pegó: caía' : `${r.skipped} valores no se pegaron: caían`} en celdas combinadas`;
   snackbar(msg, 'Deshacer', undoQuiet);
 }
 
@@ -1521,6 +1552,20 @@ function selDoClear() {
   const n = selClear(editor);
   if (n) snackbar(`Contenido borrado en ${plural(n, 'celda', 'celdas')}`, 'Deshacer', undoQuiet);
   else snackbar('Las celdas seleccionadas ya estaban vacías');
+}
+
+// Combinar y separar desde el modo selección (v0.3.7).
+function selDoMerge() {
+  const r = selMerge(editor);
+  if (!r.ok) { snackbar(`No se puede combinar: ${(r.reason || 'Elegí un rectángulo de celdas').toLowerCase()}`); return; }
+  haptic();
+  snackbar(mergedMsg(r), 'Deshacer', undoQuiet);
+}
+function selDoSplit() {
+  const r = selSplit(editor);
+  if (!r.ok) { snackbar(r.reason || 'No hay celdas combinadas en la selección'); return; }
+  haptic();
+  snackbar(splitMsg(r), 'Deshacer', undoQuiet);
 }
 
 function selDoDelete(kind) {
@@ -1562,6 +1607,12 @@ function openSelMenu(anchor, fromPress = false) {
     { label: `${icon('italic')} Cursiva`, disabled: !has, onClick: () => selDoMark('italic') },
     { label: `${icon('underline')} Subrayado`, disabled: !has, onClick: () => selDoMark('underline') },
     { label: 'Borrar el contenido', disabled: !has, onClick: selDoClear },
+    { divider: true },
+    {
+      label: `${icon('cellMerge')} Combinar celdas${has && !info.merge.canMerge ? ` <small class="menu-why">(${info.merge.reason.toLowerCase()})</small>` : ''}`,
+      disabled: !info.merge.canMerge, onClick: selDoMerge,
+    },
+    { label: `${icon('cellSplit')} Separar celdas`, disabled: !info.merge.canSplit, onClick: selDoSplit },
     { divider: true },
     ...deleteItems(info),
     ...(has ? [{ divider: true }] : []),
@@ -1852,6 +1903,13 @@ function bindSelection() {
     if (l === 'c') { e.preventDefault(); selDoCopy(); return; }
     if (l === 'x') { e.preventDefault(); selDoCopy(copyModeDefault(), true); return; }
     if (l === 'b' || l === 'i' || l === 'u') { e.preventDefault(); selDoMark({ b: 'bold', i: 'italic', u: 'underline' }[l]); return; }
+    // Ctrl + M combina (o separa, si no hay nada para combinar); Ctrl + Shift + M separa.
+    if (l === 'm') {
+      e.preventDefault();
+      const m = selectionInfo(editor)?.merge;
+      if (e.shiftKey || (m && !m.canMerge && m.canSplit)) selDoSplit(); else selDoMerge();
+      return;
+    }
     // Ctrl + V: se usa el evento "paste" (trae el texto sin pedir permiso); si no llega, se lee el portapapeles.
     if (l === 'v') { clearTimeout(pasteWait); pasteWait = setTimeout(() => { pasteWait = null; selDoPaste(); }, 250); }
   });

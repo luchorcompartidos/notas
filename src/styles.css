@@ -713,6 +713,7 @@ body:has(#view-editor.active) .snackbar { bottom: calc(var(--toolbar-h) + 12px +
 #menu.cell-menu { overflow-y: auto; }
 #menu.cell-menu .menu-item { min-height: 42px; }
 #menu.cell-menu .menu-item svg { width: 18px; height: 18px; vertical-align: -4px; margin-right: 4px; }
+#menu .menu-why { font-size: 12px; opacity: .75; }
 .ProseMirror td, .ProseMirror th { -webkit-touch-callout: none; }
 
 /* ===== Selección de celdas sueltas, filas y columnas ===== */

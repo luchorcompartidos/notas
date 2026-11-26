@@ -71,6 +71,8 @@ const P = {
   valigntop: 'M8 11h3v10h2V11h3l-4-4-4 4zM4 3v2h16V3H4z',
   valignmiddle: 'M8 19h3v4h2v-4h3l-4-4-4 4zm8-14h-3V1h-2v4H8l4 4 4-4zM4 11v2h16v-2H4z',
   valignbottom: 'M16 13h-3V3h-2v10H8l4 4 4-4zM4 19v2h16v-2H4z',
+  cellMerge: 'M3 4h2v16H3V4zm16 0h2v16h-2V4zM6 11h3V8.5l3 3.5-3 3.5V13H6v-2zm12 0v2h-3v2.5L12 12l3-3.5V11h3z',
+  cellSplit: 'M11 4h2v16h-2V4zM9 11H6V8.5L3 12l3 3.5V13h3v-2zm6 0v2h3v2.5l3-3.5-3-3.5V11h-3z',
 };
 
 export function icon(name) {

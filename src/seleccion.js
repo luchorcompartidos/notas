@@ -166,6 +166,89 @@ export function pastePlan(src, keys) {
   return { cells: out, rows, cols, used: mode === 'order' ? out.length : values.length, total: values.length, targets: sel.length, mode };
 }
 
+/* ---------- Celdas combinadas (v0.3.7) ----------
+   spans: las celdas combinadas de la tabla, como rectángulos { top, left, bottom, right } (inclusive).
+   En la selección, una celda combinada está siempre entera: todas sus casillas "r,c" o ninguna. */
+
+// Celda combinada que ocupa la casilla (o null).
+export function spanAt(spans, r, c) {
+  return spans.find((s) => r >= s.top && r <= s.bottom && c >= s.left && c <= s.right) || null;
+}
+
+// Todas las casillas de un rectángulo.
+export function rectKeys(s) {
+  const out = [];
+  for (let r = s.top; r <= s.bottom; r++) for (let c = s.left; c <= s.right; c++) out.push(cellKey(r, c));
+  return out;
+}
+
+// Deja enteras las celdas combinadas: si quedó una parte, se agrega entera, salvo que antes (prev) estuviera
+// entera, porque entonces se estaba quitando (por ejemplo, tocarla o quitar una fila que la cruza) y se quita entera.
+export function normalizeSpans(keys, spans, prev = null) {
+  const set = new Set(keys);
+  spans.forEach((s) => {
+    const ks = rectKeys(s);
+    const n = ks.filter((k) => set.has(k)).length;
+    if (!n || n === ks.length) return;
+    const wasFull = !!prev && ks.every((k) => prev.has(k));
+    ks.forEach((k) => (wasFull ? set.delete(k) : set.add(k)));
+  });
+  return set;
+}
+
+// Rectángulo entre dos casillas, agrandado para no cortar ninguna celda combinada (como Excel).
+export function rangeRect(a, b, spans) {
+  const R = { top: Math.min(a.r, b.r), left: Math.min(a.c, b.c), bottom: Math.max(a.r, b.r), right: Math.max(a.c, b.c) };
+  let changed = true;
+  while (changed) {
+    changed = false;
+    spans.forEach((s) => {
+      if (s.bottom < R.top || s.top > R.bottom || s.right < R.left || s.left > R.right) return;
+      if (s.top < R.top) { R.top = s.top; changed = true; }
+      if (s.left < R.left) { R.left = s.left; changed = true; }
+      if (s.bottom > R.bottom) { R.bottom = s.bottom; changed = true; }
+      if (s.right > R.right) { R.right = s.right; changed = true; }
+    });
+  }
+  return R;
+}
+
+// Agrega el rectángulo entre dos casillas sin cortar celdas combinadas.
+export function addRangeSpans(keys, a, b, spans) {
+  const R = rangeRect(a, b, spans);
+  return addRange(keys, { r: R.top, c: R.left }, { r: R.bottom, c: R.right });
+}
+
+// Solo la casilla de arriba a la izquierda de cada celda (una clave por celda).
+export function anchorKeys(keys, spans) {
+  const set = new Set();
+  [...keys].forEach((k) => {
+    const { r, c } = parseKey(k);
+    const s = spanAt(spans, r, c);
+    set.add(s ? cellKey(s.top, s.left) : k);
+  });
+  return set;
+}
+
+// ¿Se puede combinar o separar la selección? Devuelve { canMerge, canSplit, rect, reason, splitCount }.
+// Combinar: un rectángulo completo de dos celdas o más (las combinadas que toca, enteras).
+export function mergeInfo(keys, spans) {
+  const set = keys instanceof Set ? keys : new Set(keys);
+  const touched = spans.filter((s) => rectKeys(s).some((k) => set.has(k)));
+  const out = { canMerge: false, canSplit: touched.length > 0, splitCount: touched.length, rect: null, reason: '' };
+  if (!set.size) { out.reason = 'Primero seleccioná celdas'; return out; }
+  const b = bounds(readingOrder(set));
+  out.rect = b;
+  if (!isRect(set)) { out.reason = 'Elegí un rectángulo de celdas'; return out; }
+  const cut = spans.some((s) => !(s.bottom < b.top || s.top > b.bottom || s.right < b.left || s.left > b.right)
+    && (s.top < b.top || s.left < b.left || s.bottom > b.bottom || s.right > b.right));
+  if (cut) { out.reason = 'Elegí un rectángulo de celdas'; return out; }
+  const single = set.size === 1 || touched.some((s) => s.top === b.top && s.left === b.left && s.bottom === b.bottom && s.right === b.right);
+  if (single) { out.reason = 'Elegí dos celdas o más'; return out; }
+  out.canMerge = true;
+  return out;
+}
+
 // Letra de columna como en las planillas: 0 → A, 25 → Z, 26 → AA.
 export function colName(c) {
   let s = ''; let n = c + 1;
