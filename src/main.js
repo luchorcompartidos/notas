@@ -3305,8 +3305,19 @@ async function runIntent(data) {
     openNote(id, { isNew: true, meta: legacy ? { legacy } : {} });
     return;
   }
+  if (data.kind === 'link') { openNoteLink(data.url); return; }
   if (data.kind === 'share') await noteFromShare(data);
   if (data.kind === 'file') await importAnoteText(data.name, data.text);
+}
+
+// App Links: un link de nota tocado en otra app (WhatsApp, Gmail…) abre la nota en el APK
+function openNoteLink(url) {
+  const i = String(url || '').indexOf('#');
+  const h = i >= 0 ? parseNoteHash(String(url).slice(i)) : null;
+  if (!h) return; // link a la web sin nota: queda la lista
+  if (state.notes.some((n) => n.id === h.id)) openNote(h.id);
+  else if (state.mode === 'cloud') showNoAccess(h.id, h.owner);
+  else snackbar('Para abrir el link de una nota, iniciá sesión con Google');
 }
 
 const linkify = (line) => esc(line).replace(/https?:\/\/[^\s<>"']+/gi, (u) => `<a href="${u}">${u}</a>`);

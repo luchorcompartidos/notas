@@ -48,8 +48,18 @@ public class IntentBridgePlugin extends Plugin {
         else if (ACTION_LISTA.equals(action)) data.put("kind", "list");
         else if (ACTION_BUSCAR.equals(action)) data.put("kind", "search");
         else if (Intent.ACTION_VIEW.equals(action) && intent.getData() != null) {
-            // Abrir un archivo .anote desde un explorador de archivos, WhatsApp, Gmail, etc.
             Uri uri = intent.getData();
+            String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
+            if (scheme.equals("https") || scheme.equals("http")) {
+                // App Links: link de una nota (https://luchorcompartidos.github.io/notas/#/nota/<id>?o=<dueño>)
+                data.put("kind", "link");
+                data.put("url", uri.toString());
+                intent.setAction(Intent.ACTION_MAIN);
+                if (notify) notifyListeners("intentReceived", data, true);
+                else pending = data;
+                return;
+            }
+            // Abrir un archivo .anote desde un explorador de archivos, WhatsApp, Gmail, etc.
             String text = readText(uri);
             if (text == null) return;
             data.put("kind", "file");

@@ -75,6 +75,16 @@ filters = '''
                 <data android:host="*" />
                 <data android:mimeType="application/octet-stream" />
             </intent-filter>
+            <!-- App Links: los links de notas abren la app (archivo .well-known/assetlinks.json en el repo luchorcompartidos.github.io) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:scheme="http" />
+                <data android:host="luchorcompartidos.github.io" />
+                <data android:pathPrefix="/notas" />
+            </intent-filter>
             <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
 '''
 if 'android.intent.action.SEND' not in m:
