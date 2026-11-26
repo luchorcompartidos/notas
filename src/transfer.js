@@ -14,11 +14,32 @@ const CELL_BG_HEX = {
   yellow: 'FFF3B0', orange: 'FFE0B2', red: 'FFCDD2', pink: 'F8BBD0', purple: 'E1BEE7',
   blue: 'BBDEFB', cyan: 'B2EBF2', green: 'C8E6C9', gray: 'E0E0E0',
 };
-const tableRows = (n) => (n.content || []).map((row) => (row.content || []).map((cell) => ({
-  blocks: cell.content || [], header: cell.type === 'tableHeader', align: cell.attrs?.align || 'left', valign: cell.attrs?.valign || 'top',
-  bg: CELL_BG_HEX[cell.attrs?.bg] || null,
-})));
-const cellPlain = (cell) => blocksToText(cell.blocks).map((l) => l.trim()).filter(Boolean).join(' / ');
+/* Grilla de la tabla (v0.3.9, celdas combinadas): filas × columnas, como TableMap de prosemirror-tables.
+ * Cada casilla es: la celda (en la casilla de arriba a la izquierda, con colspan/rowspan, r y c),
+ * { covered: true, by } en las casillas que tapa una combinada, o null donde la fila no tiene celda. */
+export function tableRows(n) {
+  const trs = n.content || [];
+  const grid = trs.map(() => []);
+  trs.forEach((row, i) => {
+    let j = 0;
+    for (const cell of row.content || []) {
+      while (grid[i][j]) j++;
+      const cs = Math.max(1, Number(cell.attrs?.colspan) || 1);
+      const rs = Math.max(1, Math.min(Number(cell.attrs?.rowspan) || 1, trs.length - i));
+      const c = {
+        blocks: cell.content || [], header: cell.type === 'tableHeader', align: cell.attrs?.align || 'left', valign: cell.attrs?.valign || 'top',
+        bg: CELL_BG_HEX[cell.attrs?.bg] || null, colwidth: cell.attrs?.colwidth || null, colspan: cs, rowspan: rs, r: i, c: j,
+      };
+      for (let a = 0; a < rs; a++) for (let b = 0; b < cs; b++) grid[i + a][j + b] = a || b ? { covered: true, by: c } : c;
+      j += cs;
+    }
+  });
+  const cols = Math.max(1, ...grid.map((r) => r.length));
+  return grid.map((r) => Array.from({ length: cols }, (_, j) => r[j] || null));
+}
+const realCell = (c) => (c && !c.covered ? c : null);  // la celda, si la casilla es la de arriba a la izquierda
+// md y txt no tienen combinadas: el contenido va en la primera casilla y las demás quedan vacías (decisión 2 a).
+const cellPlain = (cell) => (realCell(cell) ? blocksToText(cell.blocks).map((l) => l.trim()).filter(Boolean).join(' / ') : '');
 
 /* ---------- Tablas: anchos de columna y altos de fila como se ven en ANote (v0.3.5) ----------
  * Modo de columnas (igual que en el editor): colMode 'auto' = según el contenido (ocupa todo el ancho);
@@ -26,19 +47,18 @@ const cellPlain = (cell) => blocksToText(cell.blocks).map((l) => l.trim()).filte
  * sin ninguno = Iguales. Los altos de fila (height, en px) son un mínimo. */
 export const PX_MM = 0.21;  // mm por px de pantalla: texto de 16 px ≈ letra de 10 pt del PDF
 export function tableGeom(n) {
-  const rows = n.content || [];
-  const cols = Math.max(1, ...rows.map((r) => (r.content || []).reduce((s, c) => s + (c.attrs?.colspan || 1), 0)));
+  const grid = tableRows(n);
+  const cols = grid[0]?.length || 1;
   const px = new Array(cols).fill(0);
-  for (const r of rows) {
-    let j = 0;
-    for (const c of r.content || []) {
-      const span = c.attrs?.colspan || 1; const cw = c.attrs?.colwidth;
-      for (let k = 0; k < span && j + k < cols; k++) if (!px[j + k] && cw?.[k] > 0) px[j + k] = cw[k];
-      j += span;
+  for (const r of grid) {
+    for (const c of r) {
+      if (!realCell(c)) continue;
+      const cw = c.colwidth;
+      for (let k = 0; k < c.colspan && c.c + k < cols; k++) if (!px[c.c + k] && cw?.[k] > 0) px[c.c + k] = cw[k];
     }
   }
   const mode = n.attrs?.colMode === 'auto' ? 'auto' : px.some((w) => w > 0) ? 'manual' : 'equal';
-  return { cols, px, mode, heights: rows.map((r) => Number(r.attrs?.height) || 0) };
+  return { cols, px, mode, heights: (n.content || []).map((r) => Number(r.attrs?.height) || 0) };
 }
 // Anchos de las columnas en la unidad del documento (mm en el PDF, twips en el docx).
 // avail = ancho disponible; perPx = unidades por px; pad = relleno de cada lado de la celda;
@@ -56,17 +76,33 @@ export function colWidths(geom, rows, avail, perPx, pad, measure) {
     return sum > avail ? w.map((x) => (x * avail) / sum) : w;
   }
   // Automático: como table-layout: auto con width: 100% (mínimo = palabra más larga, máximo = renglón más largo).
+  // Una combinada a lo ancho no suma su texto a una sola columna: primero se miden las celdas sueltas y después,
+  // de la más angosta a la más ancha, lo que le falta a cada combinada se reparte en partes iguales entre sus columnas.
   const min = new Array(cols).fill(pad * 2 + 1); const max = new Array(cols).fill(pad * 2 + 1);
+  const wide = [];
   for (const r of rows) {
     r.forEach((c, j) => {
-      if (j >= cols || !c) return;
+      if (j >= cols || !realCell(c)) return;
+      let mn = pad * 2 + 1; let mx = pad * 2 + 1;
       for (const line of blocksToText(c.blocks).map((l) => l.trim()).filter(Boolean)) {
-        max[j] = Math.max(max[j], measure(line, c.header) + pad * 2);
-        for (const word of line.split(/\s+/)) min[j] = Math.max(min[j], measure(word, c.header) + pad * 2);
+        mx = Math.max(mx, measure(line, c.header) + pad * 2);
+        for (const word of line.split(/\s+/)) mn = Math.max(mn, measure(word, c.header) + pad * 2);
       }
+      const span = Math.min(c.colspan || 1, cols - j);
+      if (span > 1) wide.push({ j, span, mn, mx });
+      else { min[j] = Math.max(min[j], mn); max[j] = Math.max(max[j], mx); }
     });
   }
   for (let j = 0; j < cols; j++) max[j] = Math.max(max[j], min[j]);
+  for (const w of wide.sort((a, b) => a.span - b.span)) {
+    const sum = (arr) => arr.slice(w.j, w.j + w.span).reduce((s, x) => s + x, 0);
+    const dMin = w.mn - sum(min); const dMax = w.mx - sum(max);
+    for (let k = w.j; k < w.j + w.span; k++) {
+      if (dMin > 0) min[k] += dMin / w.span;
+      if (dMax > 0) max[k] += dMax / w.span;
+      max[k] = Math.max(max[k], min[k]);
+    }
+  }
   const sMin = min.reduce((s, x) => s + x, 0); const sMax = max.reduce((s, x) => s + x, 0);
   if (sMax <= avail) return max.map((x) => x + ((avail - sMax) * x) / sMax);
   if (sMin >= avail) return min.map((x) => (x * avail) / sMin);
@@ -140,9 +176,9 @@ function blocksToMd(nodes, depth = 0) {
       const rows = tableRows(n);
       if (rows.length) {
         const cols = Math.max(...rows.map((r) => r.length));
-        const md = (c) => (c ? blocksToMd(c.blocks).filter((l) => l !== '').map((l) => l.trim()).join('<br>').replace(/\|/g, '\\|') : '');
+        const md = (c) => (realCell(c) ? blocksToMd(c.blocks).filter((l) => l !== '').map((l) => l.trim()).join('<br>').replace(/\|/g, '\\|') : '');
         const line = (r) => `| ${Array.from({ length: cols }, (_, j) => md(r[j])).join(' | ')} |`;
-        const sep = Array.from({ length: cols }, (_, j) => ({ center: ':---:', right: '---:' }[rows[0][j]?.align] || '---'));
+        const sep = Array.from({ length: cols }, (_, j) => ({ center: ':---:', right: '---:' }[realCell(rows[0][j])?.align] || '---'));
         out.push(line(rows[0]), `| ${sep.join(' | ')} |`, ...rows.slice(1).map(line), '');
       }
     }
@@ -219,17 +255,29 @@ export async function toDocx(notes) {
         const cols = Math.max(geom.cols, ...rows.map((r) => r.length));
         const avail = TW_AVAIL;
         const widths = colWidths({ ...geom, cols, px: Array.from({ length: cols }, (_, j) => geom.px[j] || 0) }, rows, avail, TW_PX, TW_PAD, twMeasure).map((w) => Math.max(200, Math.round(w)));
+        // Combinadas: columnSpan y rowSpan en la celda de arriba a la izquierda. Las casillas tapadas no se ponen:
+        // docx agrega solo, en las filas de abajo, las celdas de continuación (vMerge) de una combinada a lo alto.
         const trs = [];
         for (const [i, r] of rows.entries()) {
           const cells = [];
           for (let j = 0; j < cols; j++) {
-            const c = r[j];
+            const slot = r[j];
+            if (slot?.covered) continue;
+            const c = slot;
+            const span = Math.min(c?.colspan || 1, cols - j);
+            const width = widths.slice(j, j + span).reduce((s, w) => s + w, 0);
             let kids = c ? await blocks(c.blocks, 0, H_DOCX[c.align]) : [];
             if (!kids.length) kids = [new Paragraph({ children: [] })];
-            cells.push(new TableCell({ children: kids, width: { size: widths[j], type: WidthType.DXA }, verticalAlign: V_DOCX[c?.valign || 'top'], shading: c?.bg ? { fill: c.bg } : c?.header ? { fill: 'EEEEEE' } : undefined }));
+            cells.push(new TableCell({
+              children: kids, width: { size: width, type: WidthType.DXA }, verticalAlign: V_DOCX[c?.valign || 'top'],
+              shading: c?.bg ? { fill: c.bg } : c?.header ? { fill: 'EEEEEE' } : undefined,
+              columnSpan: span > 1 ? span : undefined, rowSpan: c?.rowspan > 1 ? c.rowspan : undefined,
+            }));
           }
           const h = geom.heights[i];
-          trs.push(new TableRow({ children: cells, tableHeader: r.every((c) => c.header), height: h ? { value: Math.round(h * TW_PX), rule: HeightRule.ATLEAST } : undefined }));
+          // tableHeader solo en las filas de encabezado: con false, docx escribe tblHeader="off" y mammoth (al importar) lo toma como encabezado.
+          const own = r.filter(realCell);
+          trs.push(new TableRow({ children: cells, tableHeader: (own.length > 0 && own.every((c) => c.header)) || undefined, height: h ? { value: Math.round(h * TW_PX), rule: HeightRule.ATLEAST } : undefined }));
         }
         if (trs.length) out.push(new Table({ rows: trs, columnWidths: widths, layout: TableLayoutType.FIXED, width: { size: widths.reduce((s, w) => s + w, 0), type: WidthType.DXA } }), new Paragraph({ children: [] }));
       }
@@ -300,40 +348,102 @@ export async function toPdf(notes) {
       else if (n.type === 'horizontalRule') { ensure(4); pdf.setDrawColor(180); pdf.line(M, y, M + W, y); y += 4; }
       else if (n.type === 'table') {
         // Anchos de columna y altos de fila como en ANote (tableGeom/colWidths); el alto de fila es un mínimo.
+        // Celdas combinadas (v0.3.9): cada celda ocupa la suma de sus columnas y de sus filas. Las filas unidas por una
+        // combinada a lo alto van juntas en la misma página; si no entran en una, la celda se corta y se repite el borde.
         const rows = tableRows(n);
         const geom = tableGeom(n);
-        const cols = Math.max(geom.cols, ...rows.map((r) => r.length));
+        const cols = geom.cols;
         const pad = 1.6; const size = cols > 6 ? 8.5 : 10; const lh = size * 0.42;
         pdf.setFontSize(size); pdf.setDrawColor(150); pdf.setLineWidth(0.25);
         const measure = (t, bold) => { pdf.setFont('helvetica', bold ? 'bold' : 'normal'); return pdf.getTextWidth(pdfSafe(t)); };
-        const cws = colWidths({ ...geom, cols, px: Array.from({ length: cols }, (_, j) => geom.px[j] || 0) }, rows, W - ind, PX_MM, pad, measure);
+        const cws = colWidths(geom, rows, W - ind, PX_MM, pad, measure);
         const xs = cws.reduce((a, w) => { a.push(a[a.length - 1] + w); return a; }, [M + ind]);
-        y += 1;
-        for (const [i, r] of rows.entries()) {
-          const cells = Array.from({ length: cols }, (_, j) => {
-            const c = r[j];
-            pdf.setFont('helvetica', c?.header ? 'bold' : 'normal');
-            const text = c ? blocksToText(c.blocks).map((l) => l.trim()).filter(Boolean).join('\n') : '';
-            return { c, lines: pdf.splitTextToSize(pdfSafe(text), Math.max(2, cws[j] - pad * 2)) };
-          });
-          const rh = Math.max(Math.max(...cells.map((x) => x.lines.length || 1)) * lh + pad * 2, (geom.heights[i] || 0) * PX_MM);
-          ensure(rh);
-          const top = y;
-          cells.forEach(({ c, lines }, j) => {
-            const x = xs[j]; const cw = cws[j];
-            if (c?.bg) { pdf.setFillColor(parseInt(c.bg.slice(0, 2), 16), parseInt(c.bg.slice(2, 4), 16), parseInt(c.bg.slice(4, 6), 16)); pdf.rect(x, top, cw, rh, 'F'); }
-            else if (c?.header) { pdf.setFillColor(238); pdf.rect(x, top, cw, rh, 'F'); }
-            pdf.rect(x, top, cw, rh);
-            pdf.setFont('helvetica', c?.header ? 'bold' : 'normal'); pdf.setTextColor(20);
-            const h = lines.length * lh;
-            const y0 = c?.valign === 'bottom' ? top + rh - pad - h : c?.valign === 'middle' ? top + (rh - h) / 2 : top + pad;
-            const al = c?.align === 'center' ? 'center' : c?.align === 'right' ? 'right' : 'left';
-            const tx = al === 'center' ? x + cw / 2 : al === 'right' ? x + cw - pad : x + pad;
-            lines.forEach((ln, k) => pdf.text(ln, tx, y0 + lh * (k + 0.8), { align: al }));
-          });
-          y = top + rh;
+        // 1) Celdas (una por combinada) con sus renglones de texto.
+        const cells = [];
+        rows.forEach((r, i) => r.forEach((slot, j) => {
+          if (slot?.covered) return;
+          const c = slot; const span = Math.min(c?.colspan || 1, cols - j);
+          pdf.setFont('helvetica', c?.header ? 'bold' : 'normal');
+          const text = c ? blocksToText(c.blocks).map((l) => l.trim()).filter(Boolean).join('\n') : '';
+          const w = xs[j + span] - xs[j];
+          cells.push({ c, i, rs: c?.rowspan || 1, x: xs[j], w, lines: pdf.splitTextToSize(pdfSafe(text), Math.max(2, w - pad * 2)) });
+        }));
+        const need = (cl) => Math.max(1, cl.lines.length) * lh + pad * 2;
+        // 2) Alto de cada fila: el de las celdas de una fila; lo que le falta a una combinada a lo alto se reparte en partes
+        //    iguales entre sus filas (como el navegador).
+        const rh = rows.map((_, i) => (geom.heights[i] || 0) * PX_MM);
+        for (const cl of cells) if (cl.rs === 1) rh[cl.i] = Math.max(rh[cl.i], need(cl));
+        for (const cl of cells.filter((x) => x.rs > 1).sort((a, b) => a.rs - b.rs)) {
+          const have = rh.slice(cl.i, cl.i + cl.rs).reduce((s, h) => s + h, 0);
+          if (need(cl) > have) for (let k = cl.i; k < cl.i + cl.rs; k++) rh[k] += (need(cl) - have) / cl.rs;
         }
-        y += 3;
+        // 3) Grupos de filas unidas por combinadas a lo alto.
+        const groups = [];
+        for (let i = 0; i < rows.length;) {
+          let end = i;
+          for (let k = i; k <= end; k++) for (const cl of cells) if (cl.i === k) end = Math.max(end, k + cl.rs - 1);
+          groups.push([i, end]); i = end + 1;
+        }
+        // 4) Página y posición de cada fila, calculadas "de prueba" (sin agregar páginas todavía). Una celda cortada entre
+        //    páginas pierde lugar (relleno y renglones partidos en cada tramo): si su texto no entra, se agranda su última
+        //    fila y se vuelve a calcular.
+        const p0 = pdf.getCurrentPageInfo().pageNumber;
+        const segsOf = (cl, pos) => {
+          const segs = [];
+          for (let k = cl.i; k < cl.i + cl.rs; k++) {
+            const s = segs[segs.length - 1];
+            if (s && s.page === pos[k].page) s.bottom = pos[k].top + rh[k];
+            else segs.push({ page: pos[k].page, top: pos[k].top, bottom: pos[k].top + rh[k] });
+          }
+          return segs;
+        };
+        const fitsIn = (s) => Math.max(0, Math.floor((s.bottom - s.top - pad * 2) / lh + 0.01));
+        let pos; let vp; let vy;
+        for (let pass = 0; pass < 6; pass++) {
+          pos = []; vp = p0; vy = y + 1;
+          const fit = (h) => { if (vy > M + 0.5 && vy + h > H - M) { vp++; vy = M; } };
+          for (const [a, b] of groups) {
+            const gh = rh.slice(a, b + 1).reduce((s, h) => s + h, 0);
+            const together = gh <= H - M * 2;
+            if (together) fit(gh);
+            for (let k = a; k <= b; k++) { if (!together) fit(rh[k]); pos[k] = { page: vp, top: vy }; vy += rh[k]; }
+          }
+          let grew = false;
+          for (const cl of cells) {
+            const segs = segsOf(cl, pos);
+            if (segs.length < 2) continue;
+            const room = segs.reduce((s, g) => s + fitsIn(g), 0);
+            if (room < cl.lines.length) { rh[cl.i + cl.rs - 1] += (cl.lines.length - room) * lh; grew = true; }
+          }
+          if (!grew) break;
+        }
+        for (let k = p0; k < vp; k++) pdf.addPage();
+        y = vy;
+        const last = vp;
+        // 5) Dibujo: cada celda, en uno o más tramos (uno por página).
+        for (const cl of cells) {
+          const segs = segsOf(cl, pos);
+          const { c, x, w, lines } = cl;
+          const al = c?.align === 'center' ? 'center' : c?.align === 'right' ? 'right' : 'left';
+          const tx = al === 'center' ? x + w / 2 : al === 'right' ? x + w - pad : x + pad;
+          let next = 0;
+          segs.forEach((s, si) => {
+            pdf.setPage(s.page);
+            const hh = s.bottom - s.top;
+            if (c?.bg) { pdf.setFillColor(parseInt(c.bg.slice(0, 2), 16), parseInt(c.bg.slice(2, 4), 16), parseInt(c.bg.slice(4, 6), 16)); pdf.rect(x, s.top, w, hh, 'F'); }
+            else if (c?.header) { pdf.setFillColor(238); pdf.rect(x, s.top, w, hh, 'F'); }
+            pdf.rect(x, s.top, w, hh);
+            pdf.setFont('helvetica', c?.header ? 'bold' : 'normal'); pdf.setFontSize(size); pdf.setTextColor(20);
+            // En un solo tramo, la alineación vertical de la celda; cortada entre páginas, el texto sigue en el tramo siguiente.
+            const room = si === segs.length - 1 ? lines.length - next : fitsIn(s);
+            const part = lines.slice(next, next + room); next += part.length;
+            const ph = part.length * lh;
+            const y0 = segs.length > 1 ? s.top + pad : c?.valign === 'bottom' ? s.bottom - pad - ph : c?.valign === 'middle' ? s.top + (hh - ph) / 2 : s.top + pad;
+            part.forEach((ln, k) => pdf.text(ln, tx, y0 + lh * (k + 0.8), { align: al }));
+          });
+        }
+        pdf.setPage(last);
+        y += 6.5;  // 3 mm de espacio + lo que sube la letra del renglón siguiente (antes quedaba pegado al borde)
       }
       else if (n.type === 'image' && n.attrs?.src) {
         try {
@@ -538,7 +648,7 @@ function blocksToWa(nodes, depth = 0) {
     else if (n.type === 'heading') out.push('', `*${inline(n).trim()}*`);
     else if (n.type === 'blockquote') out.push(...blocksToWa(n.content, depth).map((l) => `> ${l}`));
     else if (n.type === 'horizontalRule') out.push('———');
-    else if (n.type === 'table') out.push(...tableRows(n).map((r) => pad + r.map((c) => (c.header ? `*${cellPlain(c)}*` : cellPlain(c))).join(' | ')), '');
+    else if (n.type === 'table') out.push(...tableRows(n).map((r) => pad + r.map((c) => (realCell(c)?.header && cellPlain(c) ? `*${cellPlain(c)}*` : cellPlain(c))).join(' | ')), '');
     else if (['bulletList', 'orderedList', 'taskList'].includes(n.type)) {
       let num = 0;
       for (const item of n.content || []) {
