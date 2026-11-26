@@ -16,21 +16,22 @@
 | URL publicada | https://luchorcompartidos.github.io/notas/ |
 | Tipo | Web + Android (Capacitor, un solo código) |
 | Estado | En uso |
-| Última versión (Release) | v0.2.7 — 2026-11-26 |
+| Última versión (Release) | v0.2.8 — 2026-11-26 |
 | Se conecta con | Firebase, proyecto **notas-pro-2026** (plan gratuito Spark; Firestore en modo producción) |
 | Dispositivos viejos (Android 5/6) | **Sí, hecho**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio. Partes 1 (v0.2.1), 2 (v0.2.2) y 3 (v0.2.6) cerradas: un solo APK anda en el celular, la tablet Android 6.0.1 y la Bangho (Android 5.0) |
 
 ## 2. Etapa actual
-**Sin etapa en curso.** La selección de celdas (v0.2.7) la probó el usuario el 2026-11-26 y anda bien dentro del alcance de su prueba; si aparece algo con el uso, lo reporta.
+**App Links (v0.2.8): falta que el usuario lo pruebe en el celular y las tablets** (sección 3, paso 1).
+- La selección de celdas (v0.2.7) la probó el usuario el 2026-11-26 y anda bien dentro del alcance de su prueba; si aparece algo con el uso, lo reporta.
 - Último trabajo: selección de celdas sueltas, filas y columnas, con copiar/cortar (bloque o lista), pegar, formato y eliminar (detalle en las secciones 4 y 6, "Selección de celdas").
 - Dispositivos viejos: Partes 1, 2 y 3 cerradas (v0.2.6 probada con éxito en la Bangho con Android 5.0).
 
 ## 3. Próximos pasos
-1. Corregir lo que el usuario reporte de la selección de celdas con el uso.
-2. Confirmar en la Bangho (Android 5.0), si no se probó todavía: inicio de sesión con Google, sincronización, recordatorios y exportar PDF (Play services de Android 5 no se actualiza desde 2024).
-3. Pruebas pendientes en el celular y en la tablet Android 6: inicio de sesión con Google, exportar/enviar PDF o docx, escribir arriba/debajo de una tabla, recordatorios, sincronización.
-4. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx; arrastrar con el dedo para seleccionar un rango.
-5. Opcional: App Links (sección 5), si el usuario lo quiere.
+1. **El usuario prueba App Links (v0.2.8):** actualizar el APK, mandarse por WhatsApp el link de una nota («Copiar (o Enviar) Link») y tocarlo: tiene que abrir la nota en ANote. Probar también con una nota sin acceso (tiene que salir «Solicitar acceso»). Si en el celular abre el navegador: Información de la app → Abrir de forma predeterminada → Agregar vínculo → tildar `luchorcompartidos.github.io`. En Android 5 sale «Abrir con…» (normal).
+2. Corregir lo que el usuario reporte de la selección de celdas con el uso.
+3. Confirmar en la Bangho (Android 5.0), si no se probó todavía: inicio de sesión con Google, sincronización, recordatorios y exportar PDF (Play services de Android 5 no se actualiza desde 2024).
+4. Pruebas pendientes en el celular y en la tablet Android 6: inicio de sesión con Google, exportar/enviar PDF o docx, escribir arriba/debajo de una tabla, recordatorios, sincronización.
+5. Tablas, más adelante (si se pide): combinar celdas; exportar anchos/altos al PDF y docx; arrastrar con el dedo para seleccionar un rango.
 
 ## 4. Decisiones tomadas
 - **Un solo código** para la web y Android (Capacitor), con el aspecto lo más parecido posible en las dos, que en Android se sienta nativa. Backend gratis (Firebase Spark) y hosting en GitHub.
@@ -67,17 +68,19 @@
   - Se copia como texto separado por tabulaciones (lo que entienden Excel, Sheets y LibreOffice; con comillas si un valor tiene varios renglones). Dentro de ANote se conserva además el formato (negrita, color, alineación): si el texto del portapapeles es el mismo que se copió en ANote, se pega desde la copia interna.
   - **Pegar:** sobre una sola celda, el bloque desde ahí (agrega filas y columnas si no alcanzan, salvo con celdas combinadas); un solo valor sobre varias celdas, en todas; sobre un rectángulo múltiplo exacto del bloque, lo repite (como Excel); sobre un rectángulo, desde su esquina; sobre celdas salteadas, en orden de lectura (avisa si sobran o faltan). Los huecos de un bloque copiado en ANote no pisan la celda de destino. Queda seleccionado lo pegado.
   - **Eliminar** borra las filas (o columnas) que toca la selección; si son todas, la tabla.
+- **App Links** (v0.2.8): los links de notas (`https://luchorcompartidos.github.io/notas/#/nota/<id>?o=<dueño>`) abren el APK. El usuario creó el repo especial `luchorcompartidos.github.io` (raíz del sitio), que solo tiene `.well-known/assetlinks.json`, `.nojekyll` y README. **En ese repo no crear carpetas con el nombre de otro repo** (taparían la app publicada).
 - **Versiones:** cada pedido define el tipo de Release (la mayoría Patch; la v0.1.0 y la v0.2.0 fueron Minor; las tablas Parte A y B1 fueron Patch por elección del usuario). Si hay otras preguntas pendientes, el tipo de Release se pregunta al final; si no, se avanza con Patch y se avisa el número.
 
 ## 5. Pendientes / dudas abiertas
 - [x] **APK para dispositivos viejos:** Partes 1 (v0.2.1), 2 (v0.2.2) y 3 (v0.2.6) hechas. Un solo APK con mínimo Android 5.0; probado en la Bangho (Android 5.0) y la tablet Android 6.0.1.
 - [x] **Selección de celdas (v0.2.7):** probada por el usuario el 2026-11-26, sin errores dentro del alcance de su prueba.
-- [ ] **App Links (opcional)**: hoy, al tocar un link de una nota ("Copiar (o Enviar) Link") en el celular, se abre la web en el navegador; con App Links Android lo abriría directo en la app ANote. Android solo lo permite si el sitio `luchorcompartidos.github.io` publica un archivo que "autorice" a la app, y ese archivo tiene que estar en la raíz del sitio, que corresponde al repo especial `luchorcompartidos.github.io` (no al repo notas). Requiere que el usuario cree el repo vacío `luchorcompartidos.github.io` (Claude no puede crear repos). Después hay que subir ahí `.well-known/assetlinks.json` con el paquete `io.github.luchorcompartidos.notas` y el SHA-256 de la firma: `F3:CC:EE:75:71:9A:9E:A6:13:FD:C2:0E:30:33:49:48:C3:1A:0C:67:77:60:B4:97:B5:C5:9C:3F:E3:AD:3B:D9`. Además hay que agregar en `patch-android.py` el intent-filter `autoVerify` para `https://luchorcompartidos.github.io/notas/`.
+- [x] **App Links** (v0.2.8): hecho; falta la prueba del usuario (sección 3).
 - **Limitaciones conocidas:**
   - **Sin notificaciones push:** con la app cerrada no llegan los pedidos de acceso, ni las invitaciones, ni los recordatorios creados en otro dispositivo; se ven y se programan al abrir la app. Hacerlo requiere el plan Blaze (Cloud Functions + FCM).
   - **El bloqueo con huella no cifra:** solo oculta el contenido en la interfaz.
   - **Imágenes en copias:** una nota copiada referencia las imágenes de la original.
   - **`.anote` en Android:** algunos exploradores muestran "Abrir con…" la primera vez, y ANote... aparece también para algunos archivos genéricos.
+  - **App Links:** Android 5 no los admite (muestra «Abrir con…»). Como el filtro toma todo `/notas`, cualquier link a la web de ANote tocado en otra app abre el APK; para usar la web en el celular, escribir la dirección en el navegador. Si cambia la firma del APK, hay que cambiar la huella en `assetlinks.json`.
   - **Vista previa de links en la web:** depende de microlink.io (se puede desactivar desde ⋮).
   - **Renglón final:** si dos dispositivos editan a la vez una nota que termina en tabla, al fusionarse pueden quedar dos renglones vacíos al final. Ese renglón vacío también sale en el PDF y el docx (no se nota).
   - **Selección de celdas:** se pierde al cerrar la nota; lo copiado en ANote (con formato) se pierde al cerrar la app (en el portapapeles del sistema queda el texto). Si otro dispositivo cambia la tabla mientras se selecciona, la selección sigue en las mismas posiciones (fila, columna). En una tabla con celdas combinadas no se agregan filas ni columnas al pegar, ni se eliminan. El rango se marca tocando dos celdas, no arrastrando el dedo (arrastrar desplaza la nota).
@@ -135,6 +138,7 @@ Vite 6 (target es2022, `base: './'`) + Capacitor 7. Todo el código de la app es
   - `PortapapelesPlugin` ("Portapapeles": `escribir({ texto })` y `leer()` → `{ texto, vacio }`) usa `ClipboardManager` (desde Android 3; sirve en Android 5). Existe porque la WebView no deja leer el portapapeles desde JavaScript.
   - `AnoteApp` (Application, `android:name` del `<application>`) instala en `attachBaseContext` un `UncaughtExceptionHandler`: ante un cierre por error de Java arma un informe (versión, Android/API, equipo, ABI, hilo y traza), abre `CierreActivity` y termina el proceso. No se instala en el proceso `:cierre` (lo detecta por `/proc/self/cmdline`).
   - `CierreActivity` corre en el proceso aparte `:cierre`, con tema `Theme.Material.Light` y vistas de Android puras (sin Capacitor ni AndroidX), y muestra el error con "Copiar", "Enviar…" y "Cerrar". No atrapa cierres nativos (de la WebView, por ejemplo).
+- **App Links:** intent-filter `android:autoVerify="true"` (https/http, host `luchorcompartidos.github.io`, `pathPrefix` `/notas`) en `patch-android.py`. `IntentBridgePlugin` manda los VIEW http/https como `{ kind: 'link', url }`, y `runIntent` → `openNoteLink(url)` (`main.js`) toma el hash con `parseNoteHash`: abre la nota, o `showNoAccess` si no hay acceso. El archivo de verificación es `.well-known/assetlinks.json` del repo `luchorcompartidos.github.io` (paquete `io.github.luchorcompartidos.notas` + SHA-256 de la firma; `.nojekyll` para que Pages publique la carpeta con punto). Comprobar: `https://digitalassetlinks.googleapis.com/v1/statements:list?source.web.site=https://luchorcompartidos.github.io&relation=delegate_permission/common.handle_all_urls`.
 - `patch-android.py` corre en cada compilación sobre el proyecto que genera `npx cap add android` (y corrige `node_modules/@capacitor/status-bar/.../StatusBar.java` para Android 5: si el plugin cambia y el texto a reemplazar ya no está, el CI corta con error). Agrega intent-filters (con los `pathPattern` de `.anote`), el receiver del widget, `android:name=".AnoteApp"` y `CierreActivity`, y la dependencia biometric.
 
 **WebView viejas (Android 5/6):** al tocar CSS o JS, no usar nada que pida más de Chromium 94 sin respaldo. El APK tiene mínimo **Android 5.0 (API 21)**: si se agrega un plugin o una biblioteca nativa, verificar su `minSdk` (el CI corta con error si el APK no queda en `sdkVersion:'21'` y, si falla la compilación, lista las AAR con mínimo mayor). Si el APK se cierra en un Android viejo, la pantalla de `CierreActivity` muestra la función que falta (`NoSuchMethodError`); proteger esa llamada con `SDK_INT` (en un plugin, desde `patch-android.py`). La selección de celdas no usa nada nuevo (`inset`, `user-select` y eventos de puntero ya andan en Chromium 94); `color-mix` tiene respaldo en el bloque `@supports not` (`.cell-sel`, `.sel-handle.part`). Lo que ya tiene respaldo: `getRootWindowInsets` de `@capacitor/status-bar` (v0.2.6), `color-mix` y `:has` (bloques `@supports not` al final de `styles.css`, con las clases `editor-open` y `with-drag`), pdfjs (`legacy`), `allowWhileIdle` (`IDLE_OK`). El aviso de WebView vieja es el `<script>` ES5 de `index.html`. Para revisar un APK: `grep` en `assets/public/assets/*.js` de `structuredClone`, `Promise.withResolvers`, `findLast`, `toSorted`, `Object.groupBy`, `AbortSignal.any` (en el paquete principal no tiene que aparecer ninguno sin control).
@@ -210,3 +214,4 @@ La tabla completa de versiones está en el `README.md`.
 | v0.2.5 (2026-11-25) | Atrapador de cierres: ante un cierre por error muestra el error con Copiar/Enviar (diagnóstico de la Bangho con Android 5.0) |
 | v0.2.6 (2026-11-25) | Android 5.0: arreglo del cierre al abrir (`@capacitor/status-bar` usaba `getRootWindowInsets`, de Android 6). Probada con éxito en la Bangho el 2026-11-26 (cierre de la Parte 3) |
 | v0.2.7 (2026-11-26) | Tablas: selección de celdas sueltas, filas y columnas (letras y números como en una planilla, rango, todo, invertir), con copiar/cortar como bloque o como lista (modo por defecto en el menú lateral), pegar (agrega filas y columnas si hace falta), color, alineación, negrita/cursiva/subrayado, borrar y eliminar filas o columnas. Plugin propio `Portapapeles` en el APK. Probada por el usuario el 2026-11-26 |
+| v0.2.8 (2026-11-26) | App Links: el link de una nota abre la app (repo nuevo `luchorcompartidos.github.io` con `assetlinks.json`) |
