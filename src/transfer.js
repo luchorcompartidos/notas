@@ -20,6 +20,59 @@ const tableRows = (n) => (n.content || []).map((row) => (row.content || []).map(
 })));
 const cellPlain = (cell) => blocksToText(cell.blocks).map((l) => l.trim()).filter(Boolean).join(' / ');
 
+/* ---------- Tablas: anchos de columna y altos de fila como se ven en ANote (v0.3.5) ----------
+ * Modo de columnas (igual que en el editor): colMode 'auto' = según el contenido (ocupa todo el ancho);
+ * con algún colwidth = Manual (anchos en px; las que no tienen ancho se reparten lo que sobra);
+ * sin ninguno = Iguales. Los altos de fila (height, en px) son un mínimo. */
+export const PX_MM = 0.21;  // mm por px de pantalla: texto de 16 px ≈ letra de 10 pt del PDF
+export function tableGeom(n) {
+  const rows = n.content || [];
+  const cols = Math.max(1, ...rows.map((r) => (r.content || []).reduce((s, c) => s + (c.attrs?.colspan || 1), 0)));
+  const px = new Array(cols).fill(0);
+  for (const r of rows) {
+    let j = 0;
+    for (const c of r.content || []) {
+      const span = c.attrs?.colspan || 1; const cw = c.attrs?.colwidth;
+      for (let k = 0; k < span && j + k < cols; k++) if (!px[j + k] && cw?.[k] > 0) px[j + k] = cw[k];
+      j += span;
+    }
+  }
+  const mode = n.attrs?.colMode === 'auto' ? 'auto' : px.some((w) => w > 0) ? 'manual' : 'equal';
+  return { cols, px, mode, heights: rows.map((r) => Number(r.attrs?.height) || 0) };
+}
+// Anchos de las columnas en la unidad del documento (mm en el PDF, twips en el docx).
+// avail = ancho disponible; perPx = unidades por px; pad = relleno de cada lado de la celda;
+// measure(texto, negrita) = ancho del texto. rows = tableRows(n).
+export function colWidths(geom, rows, avail, perPx, pad, measure) {
+  const { cols, px, mode } = geom;
+  if (mode === 'equal') return new Array(cols).fill(avail / cols);
+  if (mode === 'manual') {
+    const minW = 64 * perPx;  // CELL_MIN de editor.js
+    const known = px.reduce((s, w) => s + (w > 0 ? w * perPx : 0), 0);
+    const missing = px.filter((w) => !(w > 0)).length;
+    const fill = missing ? Math.max(minW, (avail - known) / missing) : 0;
+    const w = px.map((p) => (p > 0 ? p * perPx : fill));
+    const sum = w.reduce((s, x) => s + x, 0);
+    return sum > avail ? w.map((x) => (x * avail) / sum) : w;
+  }
+  // Automático: como table-layout: auto con width: 100% (mínimo = palabra más larga, máximo = renglón más largo).
+  const min = new Array(cols).fill(pad * 2 + 1); const max = new Array(cols).fill(pad * 2 + 1);
+  for (const r of rows) {
+    r.forEach((c, j) => {
+      if (j >= cols || !c) return;
+      for (const line of blocksToText(c.blocks).map((l) => l.trim()).filter(Boolean)) {
+        max[j] = Math.max(max[j], measure(line, c.header) + pad * 2);
+        for (const word of line.split(/\s+/)) min[j] = Math.max(min[j], measure(word, c.header) + pad * 2);
+      }
+    });
+  }
+  for (let j = 0; j < cols; j++) max[j] = Math.max(max[j], min[j]);
+  const sMin = min.reduce((s, x) => s + x, 0); const sMax = max.reduce((s, x) => s + x, 0);
+  if (sMax <= avail) return max.map((x) => x + ((avail - sMax) * x) / sMax);
+  if (sMin >= avail) return min.map((x) => (x * avail) / sMin);
+  return min.map((x, j) => x + ((avail - sMin) * (max[j] - x)) / (sMax - sMin));
+}
+
 export async function resolveImages(json, getImage) {
   const walk = async (n) => {
     if (n.type === 'image' && n.attrs?.src?.startsWith('img:')) n.attrs.src = (await getImage(n.attrs.src)) || '';
@@ -132,7 +185,16 @@ const b64ToBytes = (url) => Uint8Array.from(atob(url.split(',')[1]), (ch) => ch.
 /* ---------- Word (.docx) ---------- */
 export async function toDocx(notes) {
   const d = await import('docx');
-  const { Document, Packer, Paragraph, TextRun, HeadingLevel, ImageRun, ExternalHyperlink, LevelFormat, AlignmentType, Table, TableRow, TableCell, WidthType, VerticalAlign } = d;
+  const { Document, Packer, Paragraph, TextRun, HeadingLevel, ImageRun, ExternalHyperlink, LevelFormat, AlignmentType, Table, TableRow, TableCell, WidthType, VerticalAlign, TableLayoutType, HeightRule } = d;
+  // Tablas: anchos en twips (1 mm = 56,7 twips). Ancho útil de la hoja A4 con márgenes de 1440: 11906 − 2 × 1440.
+  const TW_PX = PX_MM * 56.7; const TW_AVAIL = 9026; const TW_PAD = 108;
+  let mctx = null;
+  try { mctx = document.createElement('canvas').getContext('2d'); } catch { /* sin canvas: se estima por letras */ }
+  const twMeasure = (t, bold) => {
+    if (!mctx) return String(t).length * 110;
+    mctx.font = `${bold ? 'bold ' : ''}11pt Calibri, Carlito, Arial, sans-serif`;
+    return mctx.measureText(String(t)).width * 15;  // px (96 ppp) → twips
+  };
   const H_DOCX = { left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT, justify: AlignmentType.JUSTIFIED };
   const V_DOCX = { top: VerticalAlign.TOP, middle: VerticalAlign.CENTER, bottom: VerticalAlign.BOTTOM };
   let listInstance = 0;
@@ -153,19 +215,23 @@ export async function toDocx(notes) {
       else if (n.type === 'horizontalRule') out.push(new Paragraph({ border: { bottom: { style: 'single', size: 6, color: 'BBBBBB', space: 4 } }, children: [] }));
       else if (n.type === 'table') {
         const rows = tableRows(n);
-        const cols = Math.max(1, ...rows.map((r) => r.length));
+        const geom = tableGeom(n);
+        const cols = Math.max(geom.cols, ...rows.map((r) => r.length));
+        const avail = TW_AVAIL;
+        const widths = colWidths({ ...geom, cols, px: Array.from({ length: cols }, (_, j) => geom.px[j] || 0) }, rows, avail, TW_PX, TW_PAD, twMeasure).map((w) => Math.max(200, Math.round(w)));
         const trs = [];
-        for (const r of rows) {
+        for (const [i, r] of rows.entries()) {
           const cells = [];
           for (let j = 0; j < cols; j++) {
             const c = r[j];
             let kids = c ? await blocks(c.blocks, 0, H_DOCX[c.align]) : [];
             if (!kids.length) kids = [new Paragraph({ children: [] })];
-            cells.push(new TableCell({ children: kids, verticalAlign: V_DOCX[c?.valign || 'top'], shading: c?.bg ? { fill: c.bg } : c?.header ? { fill: 'EEEEEE' } : undefined }));
+            cells.push(new TableCell({ children: kids, width: { size: widths[j], type: WidthType.DXA }, verticalAlign: V_DOCX[c?.valign || 'top'], shading: c?.bg ? { fill: c.bg } : c?.header ? { fill: 'EEEEEE' } : undefined }));
           }
-          trs.push(new TableRow({ children: cells, tableHeader: r.every((c) => c.header) }));
+          const h = geom.heights[i];
+          trs.push(new TableRow({ children: cells, tableHeader: r.every((c) => c.header), height: h ? { value: Math.round(h * TW_PX), rule: HeightRule.ATLEAST } : undefined }));
         }
-        if (trs.length) out.push(new Table({ rows: trs, width: { size: 100, type: WidthType.PERCENTAGE } }), new Paragraph({ children: [] }));
+        if (trs.length) out.push(new Table({ rows: trs, columnWidths: widths, layout: TableLayoutType.FIXED, width: { size: widths.reduce((s, w) => s + w, 0), type: WidthType.DXA } }), new Paragraph({ children: [] }));
       }
       else if (n.type === 'image' && n.attrs?.src) {
         try {
@@ -233,24 +299,28 @@ export async function toPdf(notes) {
       else if (n.type === 'blockquote') await blocks(n.content, depth + 1);
       else if (n.type === 'horizontalRule') { ensure(4); pdf.setDrawColor(180); pdf.line(M, y, M + W, y); y += 4; }
       else if (n.type === 'table') {
-        // Grilla simple: columnas del mismo ancho, alto de cada fila según su celda más larga.
+        // Anchos de columna y altos de fila como en ANote (tableGeom/colWidths); el alto de fila es un mínimo.
         const rows = tableRows(n);
-        const cols = Math.max(1, ...rows.map((r) => r.length));
-        const cw = (W - ind) / cols; const pad = 1.6; const size = cols > 6 ? 8.5 : 10; const lh = size * 0.42;
+        const geom = tableGeom(n);
+        const cols = Math.max(geom.cols, ...rows.map((r) => r.length));
+        const pad = 1.6; const size = cols > 6 ? 8.5 : 10; const lh = size * 0.42;
         pdf.setFontSize(size); pdf.setDrawColor(150); pdf.setLineWidth(0.25);
+        const measure = (t, bold) => { pdf.setFont('helvetica', bold ? 'bold' : 'normal'); return pdf.getTextWidth(pdfSafe(t)); };
+        const cws = colWidths({ ...geom, cols, px: Array.from({ length: cols }, (_, j) => geom.px[j] || 0) }, rows, W - ind, PX_MM, pad, measure);
+        const xs = cws.reduce((a, w) => { a.push(a[a.length - 1] + w); return a; }, [M + ind]);
         y += 1;
-        for (const r of rows) {
+        for (const [i, r] of rows.entries()) {
           const cells = Array.from({ length: cols }, (_, j) => {
             const c = r[j];
             pdf.setFont('helvetica', c?.header ? 'bold' : 'normal');
             const text = c ? blocksToText(c.blocks).map((l) => l.trim()).filter(Boolean).join('\n') : '';
-            return { c, lines: pdf.splitTextToSize(pdfSafe(text), cw - pad * 2) };
+            return { c, lines: pdf.splitTextToSize(pdfSafe(text), Math.max(2, cws[j] - pad * 2)) };
           });
-          const rh = Math.max(...cells.map((x) => x.lines.length || 1)) * lh + pad * 2;
+          const rh = Math.max(Math.max(...cells.map((x) => x.lines.length || 1)) * lh + pad * 2, (geom.heights[i] || 0) * PX_MM);
           ensure(rh);
           const top = y;
           cells.forEach(({ c, lines }, j) => {
-            const x = M + ind + j * cw;
+            const x = xs[j]; const cw = cws[j];
             if (c?.bg) { pdf.setFillColor(parseInt(c.bg.slice(0, 2), 16), parseInt(c.bg.slice(2, 4), 16), parseInt(c.bg.slice(4, 6), 16)); pdf.rect(x, top, cw, rh, 'F'); }
             else if (c?.header) { pdf.setFillColor(238); pdf.rect(x, top, cw, rh, 'F'); }
             pdf.rect(x, top, cw, rh);
