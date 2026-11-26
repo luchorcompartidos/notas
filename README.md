@@ -42,6 +42,7 @@ dispositivos y **fusión de cambios** (Yjs + Firestore).
 | — | v0.3.4 | **Cambiar la contraseña** desde ⋮ Menú → «Seguridad de la cuenta» (cuentas con contraseña propia de ANote): la actual, la nueva y repetirla; «No me acuerdo de la actual» manda el correo para elegir otra. Los otros dispositivos cierran la sesión solos. Además, un push que solo cambia documentos (.md) ya no corre el CI |
 | — | v0.3.5 | **Tablas: anchos y altos al exportar**: el PDF y el docx respetan el ancho de las columnas (Automático según el contenido, Iguales o Manual, achicando si no entra en la hoja) y el alto mínimo de las filas |
 | — | v0.3.6 | **Tablas: arrastrar para seleccionar un rango**: con «Seleccionar», apoyar el dedo un instante en una celda y arrastrar marca el rectángulo (se suma a lo ya elegido); deslizar enseguida sigue desplazando la nota. Con el mouse, apretar y arrastrar. Cerca del borde, la nota y la tabla se desplazan solas |
+| — | v0.3.7 | **Tablas: combinar y separar celdas**: con «Seleccionar», marcar un rectángulo → «Combinar celdas» (junta el contenido de todas, como Word y Google Docs); «Separar celdas» desde el mismo menú, el menú de la celda o el panel de la tabla (las nuevas heredan color y alineación). En la PC, Ctrl + M. La selección toma las celdas combinadas enteras |
 
 Desde la v0.0.3, la app Android inicia sesión con Google (nativo) y sincroniza igual que la web. Desde la v0.3.0 también se puede entrar con correo y contraseña propia de ANote (en la web y en el APK, sin plugin nativo).
 
