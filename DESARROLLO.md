@@ -21,8 +21,11 @@
 | Dispositivos viejos (Android 5/6) | **Sí, hecho**: aplicar `plantilla/APK-DISPOSITIVOS-VIEJOS.md` del repo home en cada cambio y, al cerrar cada etapa, revisar si lo hecho deja algo nuevo para esa guía (un problema, un arreglo, una versión de biblioteca, una prueba en las tablets) y, si corresponde, actualizarla (sección del tema + Historial) y subirla al repo home. Partes 1 (v0.2.1), 2 (v0.2.2) y 3 (v0.2.6) cerradas: un solo APK anda en el celular, la tablet Android 6.0.1 y la Bangho (Android 5.0) |
 
 ## 2. Etapa actual
-**Tablas: anchos y altos al exportar (v0.3.5) y arrastrar para seleccionar un rango (v0.3.6): hecho (Patch cada una).** El PDF y el docx respetan el modo de columnas (Automático, Iguales o Manual) y el alto mínimo de las filas; seleccionando celdas, apoyar el dedo ~0,3 s en una celda y arrastrar elige un rango (con el mouse, apretar y arrastrar). Falta la prueba del usuario (sección 3).
-- **Orden elegido por el usuario para los próximos chats:** primero **combinar celdas** (sección 3, punto 12; se dejó para otro chat por ser la parte más pesada), y después la **pantalla de administración de usuarios** (sección 5).
+**Tablas: combinar celdas, por partes (elegido por el usuario el 2026-11-26; Release Patch en cada parte que toque la app).**
+- **Parte A (plan, solo documentos): hecha** el 2026-11-26. Plan completo en la sección 6, "Plan: combinar celdas". Sin Release (solo `.md`).
+- **Próxima: Parte B** (combinar y separar), en un chat nuevo: *"Seguimos con ANote (repo notas), combinar celdas Parte B. Leé DESARROLLO.md."* Antes de empezar, confirmar con el usuario las 4 decisiones marcadas «A confirmar» en el plan (si no contesta, se usa la recomendada).
+- Después: Parte C (operaciones de tabla con celdas combinadas) y Parte D (exportar), y luego la **pantalla de administración de usuarios** (sección 5).
+- Anterior: anchos y altos al exportar (v0.3.5) y arrastrar para seleccionar (v0.3.6), hechos; falta la prueba del usuario (sección 3).
 - Cambiar la contraseña desde la app (v0.3.4): hecho; falta la prueba del usuario (sección 3).
 - Ocultar/mostrar notas por reglas: Etapas 1 (v0.3.2) y 2 (v0.3.3) hechas; falta la prueba del usuario (sección 3).
 - Inicio de sesión con correo y contraseña propia (v0.3.0 Minor y v0.3.1 Patch): hecho; falta que el usuario **pegue las reglas nuevas** en Firebase y lo pruebe (sección 3).
@@ -50,7 +53,7 @@
 9. Corregir lo que el usuario reporte de la selección de celdas con el uso.
 10. Confirmar en la Bangho (Android 5.0), si no se probó todavía: inicio de sesión con Google, sincronización, recordatorios y exportar PDF (Play services de Android 5 no se actualiza desde 2024).
 11. Pruebas pendientes en el celular y en la tablet Android 6: inicio de sesión con Google, exportar/enviar PDF o docx, escribir arriba/debajo de una tabla, recordatorios, sincronización.
-12. **Combinar celdas (próximo chat, elegido por el usuario):** combinar un rectángulo de celdas seleccionadas y separarlas, con su efecto en exportar (PDF, docx, md, txt: hoy `tableRows` y `colWidths` ignoran `colspan`/`rowspan`), pegar, ordenar, eliminar filas/columnas, copiar fila/columna y la selección propia (`hasMerged` ya existe en `editor.js`). Después, la pantalla de administración de usuarios (sección 5).
+12. **Combinar celdas, Partes B, C y D** (próximos chats, una por chat; plan en la sección 6, "Plan: combinar celdas"). Después, la pantalla de administración de usuarios (sección 5).
 13. Cuenta, más adelante (si se pide): personalizar en la consola de Firebase el texto de los correos (Authentication → Plantillas).
 
 ## 4. Decisiones tomadas
@@ -136,7 +139,7 @@
 - [x] **Ocultar/mostrar notas por criterios:** Etapa 1 (v0.3.2) y Etapa 2 (v0.3.3) hechas; falta la prueba del usuario (sección 3).
 - [x] **Cambiar la contraseña desde la app (v0.3.4):** hecho; falta la prueba del usuario (sección 3).
 - [x] **Tablas: anchos y altos al exportar (v0.3.5) y arrastrar para seleccionar (v0.3.6):** hecho; falta la prueba del usuario (sección 3).
-- [ ] **Tablas: combinar celdas** (próximo chat; sección 3, punto 12).
+- [ ] **Tablas: combinar celdas:** Parte A (plan) hecha; faltan las Partes B, C y D (sección 6, "Plan: combinar celdas") y las 4 decisiones «A confirmar».
 - [ ] **Pantalla de administración de usuarios** (otra etapa, sin definir en detalle; va **después** de las mejoras de tablas, por elección del usuario): visible solo para el dueño de la app, para gestionar de forma **forzada** acciones que el usuario no puede hacer por sí mismo (por falta de acceso o por urgencia). Ideas ya conversadas: listado de usuarios (ANote lo arma al entrar cada uno: nombre, correo, último ingreso; Firebase no deja listar usuarios desde la app), elegir uno, varios o todos y **cerrarles la sesión** en todos sus dispositivos, y **marcarlos para que se les pida pasar a contraseña propia** (sugerido u obligatorio). Que el próximo inicio con Google muestre siempre el selector de cuentas (Google no permite que una app obligue a pedir la contraseña). Es un cierre hecho por la app (no un bloqueo estricto); para bloquear de verdad, **desactivar** el usuario en la consola de Firebase (no borrarlo: al volver a entrar tendría otro uid y perdería sus notas). Requiere cambio de reglas.
 - [x] **App Links** (v0.2.8): hecho; falta la prueba del usuario (sección 3).
 - **Limitaciones conocidas:**
@@ -194,6 +197,50 @@ Vite 6 (target es2022, `base: './'`) + Capacitor 7. Todo el código de la app es
 - **Arrastrar** (v0.3.6, `bindSelection`, bloque "Arrastrar para seleccionar un rango"): `drag` = `{ from, base, last, x, y, active, armedAt, mouse }`. Dedo: `touchstart` (pasivo) arma un temporizador de `DRAG_HOLD` = 300 ms; el `touchmove` es **no pasivo**: si el dedo se mueve más de 10 px (igual que `bindCellPress`) después de armado, `dragActivate` (vibra, `tap = null` para que no haya clic) y `preventDefault` en cada movimiento; si se movió antes, o si ya se abrió el menú (`cellMenuAt >= armedAt`), no hace nada (desplaza). Mouse: `pointerdown` en captura (el otro corta la propagación) y `pointermove`/`pointerup` en `window`. `dragTo` busca la celda con `elementFromPoint` y llama a `dragSelection(editor, base, from, to)` (`editor.js`: `base` ∪ rectángulo). `dragScroll` (con `requestAnimationFrame`) desplaza `#editor-scroll` a 48 px del borde (descontando `#sel-bar`/`#sel-actions`) y el `.tableWrapper` de costado. La ayuda de la selección cambió de clave (`notas-sel-ayuda2`) para que se vea una vez más.
 - **Teclado (PC):** Escape, Supr/Retroceso, Ctrl + A/C/X/B/I/U; Ctrl + V usa el evento `paste` (trae el texto sin pedir permiso) y, si no llega en 250 ms, lee el portapapeles.
 - HTML: `#sel-bar` (misma posición que `#table-bar`) y `#sel-actions` (misma posición que `#toolbar`) en `index.html`; botón `data-tbl="select"` en `#table-bar`.
+
+**Plan: combinar celdas** (Parte A, 2026-11-26; revisado contra el código de la v0.3.6):
+
+*Base técnica.* Las celdas ya admiten `colspan`/`rowspan` (vienen de prosemirror-tables; hoy solo aparecen en archivos importados, por ejemplo docx con mammoth) y `colwidth` es un arreglo por columna abarcada. `@tiptap/pm/tables` exporta todo prosemirror-tables: `CellSelection`, `TableMap`, `mergeCells`, `splitCell`, `addRow`, `addColumn`, `removeRow`, `removeColumn`, `selectedRect`. `TableMap.map` repite la posición de una celda combinada en cada casilla que ocupa; `map.findCell(pos)` da su rectángulo y `map.rectBetween` ya agranda un rango para que no corte celdas combinadas. La extensión Table de Tiptap trae `fixTables` (repara tablas mal formadas en cada transacción): cubre el caso de dos dispositivos que combinan y escriben a la vez.
+
+*Lo que ya funciona con celdas combinadas:* insertar y eliminar fila/columna desde la barra (comandos de prosemirror-tables), ancho de columna (`setColAttr` ya usa el índice dentro de `colwidth`), `tableGeom` (cuenta `colspan`), `copyTablePart` (las casillas tapadas van vacías), las decoraciones de la selección (se pintan por posición: una celda combinada se marca una vez) y `selCellPositions` (sin repetidas).
+
+*Lo que hoy bloquea `hasMerged`:* ordenar (`sortTable`), pegar agrandando la tabla (`selPaste` → `growTable`) y eliminar filas/columnas desde la selección (`selDeleteLines`). `insertCopied`/`duplicateTablePart` no están bloqueados pero **rompen** la tabla si la fila o columna nueva cae en medio de una combinada (insertan celdas sueltas sin agrandar el `rowspan`/`colspan`).
+
+**Parte B — combinar y separar** (Patch):
+- `editor.js`:
+  - `selExpand(s, cells)`: agrega a la selección todas las casillas de cada celda combinada que toca, y `rectOf(s)` = recuadro agrandado con `map.rectBetween` (para no cortar combinadas).
+  - Usar `selExpand` en `updateSelection` (`toggle` suma o quita la celda **entera**; `range`, `row`, `col`, `invert`) y en `dragSelection`. Las claves "r,c" siguen igual (todas las casillas de la combinada quedan en el conjunto).
+  - `selMergeInfo(editor)` → `{ canMerge, canSplit, reason }`: se puede combinar si la selección, ya agrandada, es un rectángulo completo (`Sel.isRect`) de 2 o más casillas y no es una sola celda combinada; se puede separar si toca alguna combinada.
+  - `selMerge(editor)`: arma una `CellSelection` con las esquinas del rectángulo (`CellSelection.create(doc, anchorCellPos, headCellPos)`) en una transacción y aplica `mergeCells(state, dispatch)` sobre ese estado. La celda resultante es la de arriba a la izquierda (tipo, color, alineación) con `colwidth` sumados (lo hace `mergeCells`). La selección propia queda en la celda combinada.
+  - `selSplit(editor)`: separa todas las combinadas de la selección, de la última a la primera (`splitCell` con una `CellSelection` sobre cada una, o a mano con `setNodeMarkup` + `insert` de celdas vacías vía `map.positionAt`). El contenido queda en la de arriba a la izquierda.
+  - Fuera del modo selección: `cellMergeInfo`/`mergeCursor` y `splitCursor` para la celda del cursor o una `CellSelection` hecha con el mouse.
+- `main.js`:
+  - En `openSelMenu`, debajo de «Borrar el contenido»: «Combinar celdas» (deshabilitado con el motivo si no se puede: «Elegí un rectángulo de celdas») y «Separar celdas». Snackbar con «Deshacer» (`editor.chain().focus().undo()`), como en ordenar.
+  - En el menú de la celda (`openCellMenu`) y en el panel de tabla (`openTableSheet`): «Separar celda» si la del cursor está combinada; «Combinar celdas» si hay una `CellSelection` del mouse.
+  - Atajo en la PC (modo selección): Ctrl + M combinar, Ctrl + Shift + M separar (a confirmar que no choque con otro atajo).
+- CSS: nada nuevo (una celda combinada se dibuja como cualquier `td` con `colspan`/`rowspan`). Dispositivos viejos: solo JS de prosemirror-tables, que ya está en el paquete.
+- Prueba con node: `seleccion.js` (si `selExpand` va ahí, recibiendo la lista de rectángulos de las combinadas) y un documento de mentira con `TableMap` no se puede (sin `npm install`): revisar a mano con `node --check`.
+
+**Parte C — operaciones con celdas combinadas** (Patch):
+- `selDeleteLines`: sacar el bloqueo; eliminar con `removeRow(tr, rect, r)` / `removeColumn(tr, rect, c)` de la última a la primera (`rect` = `{ map, table, tableStart, left, top, right, bottom }` recalculado después de cada una), que achican el `rowspan`/`colspan` de las combinadas.
+- `insertCopied` (y `duplicateTablePart`): insertar primero la fila o columna vacía con `addRow`/`addColumn` (agrandan las combinadas que cruza) y después llenar las celdas nuevas con el contenido copiado. Una casilla copiada que estaba tapada (null) queda vacía; si la nueva fila cae dentro de una combinada vertical, esa casilla no existe (la ocupa la combinada) y su contenido se descarta.
+- `selPaste`: sacar el bloqueo de `growTable` (agregar al final de cada fila y filas abajo funciona con combinadas; revisar la fila de referencia para `colwidth`). Un valor que cae en una casilla tapada (no la de arriba a la izquierda) se ignora; avisar «N valores no se pegaron: caían en celdas combinadas».
+- `sortTable`: ver decisión 3.
+- Ancho/alto: revisar `setColumnsMode('equal'|'manual')`, `measureCol` (ya divide por `colspan`) y `setRowsMode` con una combinada vertical.
+
+**Parte D — exportar** (Patch; `transfer.js`):
+- `tableRows` pasa a devolver una grilla de `rows × cols` (con `TableMap` armado a mano desde el JSON: recorrer filas, saltear casillas ocupadas por `rowspan` de arriba) donde cada casilla es la celda con `{ colspan, rowspan }` en la de arriba a la izquierda, `{ covered: true, by }` en las tapadas y `null` donde falta celda.
+- **PDF:** calcular primero el alto de cada fila (una combinada vertical reparte lo que le falta en la última fila que abarca), después dibujar cada celda con `x` = suma de anchos hasta `left`, ancho = suma de sus columnas y alto = suma de sus filas. Las filas de un grupo con combinada vertical van juntas en la misma página (`ensure` del grupo entero; si no entra en una página, se corta y se repite el borde).
+- **docx:** `TableCell` con `columnSpan` y `rowSpan` (docx 9 agrega solo las celdas `vMerge` de continuación: en las filas siguientes no se ponen las tapadas). `width` de la celda = suma de sus columnas.
+- **md y txt:** ver decisión 2. **json/.anote:** ya guardan los atributos.
+- `colWidths` en Automático: una combinada no suma su texto a una sola columna (repartirlo entre las que abarca, o ignorarla, como `table-layout: auto`).
+- Importar: md (GFM) no tiene combinadas; html y docx ya las traen. Probar un docx con combinadas exportado y vuelto a importar.
+
+**A confirmar con el usuario** (antes o al empezar la Parte B; entre paréntesis, la recomendada):
+1. **Contenido al combinar:** (a) juntar el contenido de todas las celdas, uno debajo del otro, como Word y Google Docs (**recomendada**: no se pierde nada); (b) dejar solo el de la celda de arriba a la izquierda, como Excel, avisando antes si se pierde texto.
+2. **md y txt** (no tienen celdas combinadas): (a) el contenido en la primera casilla y las demás vacías (**recomendada**, como Excel al copiar); (b) repetir el contenido en cada casilla.
+3. **Ordenar** con combinadas: (a) permitirlo si las combinadas son solo horizontales dentro de una fila (o están en el encabezado) y bloquearlo si hay una vertical entre las filas a ordenar (**recomendada**); (b) seguir bloqueándolo siempre.
+4. **Al separar,** las celdas nuevas: (a) heredan el color de fondo y la alineación de la combinada (**recomendada**, lo que hace prosemirror-tables); (b) quedan sin formato.
 
 **Ocultar/mostrar por reglas** (v0.3.2, `main.js`, bloques "Ocultar/mostrar por reglas" y "…: panel"):
 - Se guarda en `settings/prefs.hideRules` = `{ on, mode: 'hide'|'show', combine: 'any'|'all', keepPinned, rules: [] }`. **Siempre se escribe el objeto entero** (`saveSettings` usa `merge: true`: un mapa se fusiona, pero el arreglo `rules` se reemplaza). Sin cambio de reglas de Firestore.
@@ -307,6 +354,7 @@ La tabla completa de versiones está en el `README.md`.
 | v0.3.1 (2026-11-26) | Correo y contraseña, Paso B (APK): el panel queda arriba del teclado y centra el campo; al volver a la app (o al tocar «Continuar» del correo) se comprueba sola la verificación |
 | v0.3.2 (2026-11-26) | Ocultar/mostrar por reglas, Etapa 1: panel en el menú lateral con todos los criterios, «Ocultar…» o «Mostrar solo…», cualquiera/todas, fijadas siempre visibles, interruptor; «Excluir ocultas» también saca las ocultas por reglas; marca `fromTemplate` al usar una plantilla |
 | v0.3.3 (2026-11-26) | Ocultar/mostrar por reglas, Etapa 2: aviso en la pantalla principal («N notas ocultas por reglas · Mostrar/Ocultar») con interruptor rápido y botón de vista; vistas con nombre (crear, cambiar desde ⋮ Menú, el aviso o el panel, renombrar, borrar; los cambios se guardan solos en la vista elegida; «Sin vista» vuelve a las reglas sin nombre) |
+| v0.3.4 (2026-11-26) | Cambiar la contraseña desde «Seguridad de la cuenta» (actual, nueva y repetir; «No me acuerdo de la actual» manda el correo de recuperación). El CI no corre en pushes que solo cambian `.md` |
 | v0.3.5 (2026-11-26) | Tablas: el PDF y el docx respetan el ancho de las columnas (Automático, Iguales o Manual) y el alto mínimo de las filas |
 | v0.3.6 (2026-11-26) | Tablas: arrastrar para seleccionar un rango (apoyar el dedo ~0,3 s y arrastrar; con el mouse, apretar y arrastrar), con desplazamiento automático cerca de los bordes |
-| v0.3.4 (2026-11-26) | Cambiar la contraseña desde «Seguridad de la cuenta» (actual, nueva y repetir; «No me acuerdo de la actual» manda el correo de recuperación). El CI no corre en pushes que solo cambian `.md` |
+| — (2026-11-26) | Combinar celdas, Parte A: plan en DESARROLLO.md (sección 6), sin cambios en la app ni Release |
