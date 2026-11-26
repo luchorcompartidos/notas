@@ -106,6 +106,23 @@ if 'CierreActivity' not in m:
 
 open(m_path, 'w', encoding='utf-8').write(m)
 
+# 3b. Android 5.0 (API 21): @capacitor/status-bar 7 llama a View.getRootWindowInsets() (API 23) sin control
+# al arrancar y la app se cerraba con NoSuchMethodError (v0.2.5, Bangho). Se protege con SDK_INT y en
+# Android 5 se toma el alto de la barra del recurso "status_bar_height". Android 6+ queda igual.
+SB = 'node_modules/@capacitor/status-bar/android/src/main/java/com/capacitorjs/plugins/statusbar/StatusBar.java'
+sb = open(SB, encoding='utf-8').read()
+viejo = 'WindowInsets insets = activity.getWindow().getDecorView().getRootWindowInsets();'
+nuevo = '''if (Build.VERSION.SDK_INT < 23) { // ANote: Android 5 no tiene getRootWindowInsets()
+            int resId = activity.getResources().getIdentifier("status_bar_height", "dimen", "android");
+            return resId > 0 ? (int) (activity.getResources().getDimensionPixelSize(resId) / metrics.density) : 0;
+        }
+        ''' + viejo
+if 'ANote: Android 5' not in sb:
+    assert sb.count(viejo) == 1, 'StatusBar.java cambió: revisar el arreglo de getRootWindowInsets para Android 5'
+    sb = sb.replace(viejo, nuevo, 1)
+    open(SB, 'w', encoding='utf-8').write(sb)
+assert 'ANote: Android 5' in sb
+
 # 4. Dependencia para la huella (BiometricPrompt)
 g_path = 'android/app/build.gradle'
 g = open(g_path, encoding='utf-8').read()
