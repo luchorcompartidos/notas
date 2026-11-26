@@ -11,6 +11,7 @@ on:
     # publicar la web ni compilar el APK. Si hace falta, usar "Run workflow".
     paths-ignore:
       - '**.md'
+      - 'pruebas/**'
   workflow_dispatch:
     inputs:
       bump:
